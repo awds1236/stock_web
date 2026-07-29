@@ -16,6 +16,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 
+# .env 는 **절대경로**로 지정합니다. 상대경로("...env")로 두면 현재 작업 디렉터리
+# 기준으로 찾기 때문에, backend/ 밖에서 실행하면 키를 넣어두고도 조용히 빈 값이
+# 되어 "인증키가 설정되지 않았습니다" 라는 엉뚱한 오류를 보게 됩니다.
+ENV_FILE = BACKEND_ROOT / ".env"
+
 
 class CostModel(BaseSettings):
     """거래비용 모델.
@@ -24,7 +29,9 @@ class CostModel(BaseSettings):
     실제 세율이 아닙니다 -- 반드시 확인 후 주입하십시오.
     """
 
-    model_config = SettingsConfigDict(env_prefix="COST_", env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_prefix="COST_", env_file=ENV_FILE, extra="ignore"
+    )
 
     sell_tax: float = Field(
         default=0.0015,
@@ -45,7 +52,7 @@ class CostModel(BaseSettings):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
     krx_auth_key: str = Field(default="", description="KRX Open API 인증키 (AUTH_KEY 헤더)")
     sec_user_agent: str = Field(
