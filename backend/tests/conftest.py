@@ -41,8 +41,14 @@ def make_panel(
         .rename(columns={"level_0": "date", "level_1": "ticker"})
     )
     panel["close"] = panel["open"]
+    # 실제 시세 패널이 갖는 컬럼을 모두 채웁니다. 최소 스키마로 두면 지표·특성
+    # 코드가 컬럼 부재 경로로만 검증되어, 정상 경로의 버그를 놓칩니다.
+    panel["high"] = panel["open"]
+    panel["low"] = panel["open"]
     panel["value"] = trading_value
+    panel["volume"] = panel["value"] / panel["open"]
     panel["market_cap"] = panel["open"] * 1e6
+    panel["shares"] = 1e6
     return panel
 
 

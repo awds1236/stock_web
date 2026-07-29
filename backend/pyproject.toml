@@ -15,6 +15,7 @@ dependencies = [
     "scipy>=1.14",
     "yfinance>=1.5.2",
     "cryptography>=49.0.0",
+    "scikit-learn>=1.9.0",
 ]
 
 [project.optional-dependencies]
