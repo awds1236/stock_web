@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     krx_auth_key: str = Field(default="", description="KRX Open API 인증키 (AUTH_KEY 헤더)")
+    sec_user_agent: str = Field(
+        default="",
+        description="SEC EDGAR User-Agent. 'Name email@example.com' 형식의 실제 "
+        "연락처가 필요하며, 없으면 SEC 가 요청을 차단합니다.",
+    )
     krx_openapi_base: str = "https://data-dbg.krx.co.kr/svc/apis"
     krx_mdc_base: str = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
 
