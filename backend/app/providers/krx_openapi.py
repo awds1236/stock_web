@@ -108,7 +108,14 @@ class KrxOpenApiClient:
         budget: CallBudget | None = None,
         timeout: float = 30.0,
     ) -> None:
-        self.auth_key = auth_key if auth_key is not None else settings.krx_auth_key
+        # 인증정보는 앱 설정 화면에서 입력받아 암호화 저장소에 보관됩니다.
+        # 환경변수가 설정되어 있으면 그쪽이 우선합니다(배포용).
+        if auth_key is not None:
+            self.auth_key = auth_key
+        else:
+            from app.credentials import get_credential
+
+            self.auth_key = get_credential("KRX_AUTH_KEY")
         self.cache = cache or DiskCache()
         self.budget = budget or CallBudget()
         self._client = httpx.Client(
@@ -135,8 +142,9 @@ class KrxOpenApiClient:
         """엔드포인트 1회 호출. 캐시 적중 시 호출 예산을 소비하지 않습니다."""
         if not self.auth_key:
             raise ProviderError(
-                "KRX_AUTH_KEY 가 설정되지 않았습니다. openapi.krx.co.kr 에서 인증키를 "
-                "발급받아 backend/.env 에 KRX_AUTH_KEY=... 로 넣으십시오."
+                "KRX 인증키가 설정되지 않았습니다. 앱 설정 화면에서 입력하거나, "
+                "배포 환경이라면 KRX_AUTH_KEY 환경변수로 주입하십시오. "
+                "발급: https://openapi.krx.co.kr/ (인증키 신청 후 서비스별 이용신청 필요)"
             )
 
         ns = f"krx_openapi/{endpoint.group}/{endpoint.name}"

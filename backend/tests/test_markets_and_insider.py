@@ -17,6 +17,24 @@ from app.indicators import insider
 from app.providers import sec_edgar
 
 
+def _use_empty_store(tmp_path, monkeypatch) -> None:
+    """인증정보가 비어 있는 임시 저장소로 교체.
+
+    실제 저장소를 쓰면 개발자 머신에 저장된 값 때문에 테스트가 통과해버려,
+    '연락처 없이도 동작한다'는 잘못된 안심을 줍니다.
+    """
+    import app.credentials as cred_mod
+
+    monkeypatch.delenv("SEC_USER_AGENT", raising=False)
+    monkeypatch.setattr(
+        cred_mod,
+        "store",
+        cred_mod.CredentialStore(
+            store_path=tmp_path / "c.enc", key_path=tmp_path / ".k"
+        ),
+    )
+
+
 # ── 시장 추상화 ──────────────────────────────────────────────────────────
 class TestMarkets:
     def test_korea_and_us_have_different_cost_structures(self):
@@ -140,16 +158,17 @@ class TestParseForm4:
         assert sec_edgar.parse_form4("no xml here", date(2026, 7, 22)) == []
         assert sec_edgar.parse_form4("<ownershipDocument>broken", date(2026, 7, 22)) == []
 
-    def test_client_rejects_missing_user_agent(self, monkeypatch):
+    def test_client_rejects_missing_user_agent(self, tmp_path, monkeypatch):
         """SEC 는 연락처 없는 요청을 차단합니다. 실패는 호출 전에 나야 합니다."""
-        monkeypatch.setattr(sec_edgar.settings, "sec_user_agent", "")
+        _use_empty_store(tmp_path, monkeypatch)
         with pytest.raises(Exception, match="User-Agent"):
             sec_edgar.SecEdgarClient()
 
-    def test_client_rejects_user_agent_without_contact(self, monkeypatch):
-        monkeypatch.setattr(sec_edgar.settings, "sec_user_agent", "my-scraper/1.0")
+    def test_client_rejects_user_agent_without_contact(self, tmp_path, monkeypatch):
+        """저장소를 우회해 값을 직접 넘겨도 형식 검사는 통과하지 못해야 합니다."""
+        _use_empty_store(tmp_path, monkeypatch)
         with pytest.raises(Exception, match="User-Agent"):
-            sec_edgar.SecEdgarClient()
+            sec_edgar.SecEdgarClient(user_agent="my-scraper/1.0")
 
 
 # ── 내부자 지표 ──────────────────────────────────────────────────────────

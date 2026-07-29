@@ -54,12 +54,10 @@ class CostModel(BaseSettings):
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=ENV_FILE, extra="ignore")
 
-    krx_auth_key: str = Field(default="", description="KRX Open API 인증키 (AUTH_KEY 헤더)")
-    sec_user_agent: str = Field(
-        default="",
-        description="SEC EDGAR User-Agent. 'Name email@example.com' 형식의 실제 "
-        "연락처가 필요하며, 없으면 SEC 가 요청을 차단합니다.",
-    )
+    # 인증정보(KRX 인증키, SEC 연락처)는 여기 두지 않습니다. 앱 설정 화면에서
+    # 입력받아 암호화 저장소(app/credentials.py)에 보관하며, 배포 시에는 동명의
+    # 환경변수가 우선합니다. 이 파일에 필드를 다시 만들면 값이 두 곳에 생겨
+    # 어느 쪽이 쓰이는지 추적이 어려워집니다.
     krx_openapi_base: str = "https://data-dbg.krx.co.kr/svc/apis"
     krx_mdc_base: str = "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
 

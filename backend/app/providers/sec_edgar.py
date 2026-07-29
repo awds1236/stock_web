@@ -29,7 +29,6 @@ from datetime import date, timedelta
 import httpx
 import pandas as pd
 
-from app.config import settings
 from app.providers.base import ProviderError
 from app.providers.cache import DiskCache
 
@@ -72,12 +71,16 @@ class SecEdgarClient:
         requests_per_second: float = 8.0,
         timeout: float = 30.0,
     ) -> None:
-        self.user_agent = user_agent or settings.sec_user_agent
+        if user_agent is None:
+            from app.credentials import get_credential
+
+            user_agent = get_credential("SEC_USER_AGENT")
+        self.user_agent = user_agent
         if not self.user_agent or "@" not in self.user_agent:
             raise ProviderError(
-                "SEC 는 User-Agent 에 실제 연락처를 요구합니다. backend/.env 에 "
-                "SEC_USER_AGENT='Your Name your@email.com' 형식으로 설정하십시오. "
-                "없으면 SEC 가 요청을 차단합니다."
+                "SEC 는 User-Agent 에 실제 연락처를 요구합니다. 앱 설정 화면에서 "
+                "'이름 email@example.com' 형식으로 입력하십시오. SEC 는 API 키를 "
+                "발급하지 않으며, 연락처가 없으면 요청을 차단합니다."
             )
         self.cache = cache or DiskCache()
         self._min_interval = 1.0 / requests_per_second
