@@ -31,6 +31,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 import pandas as pd
+from scipy import stats as sps
 
 
 @dataclass(frozen=True)
@@ -213,6 +214,35 @@ def out_of_sample_r2(
     return 1.0 - ss_res / ss_tot
 
 
+def mean_daily_ic(predictions: pd.DataFrame, min_names: int = 5) -> float:
+    """일별 횡단면 Spearman IC 의 평균.
+
+    드리프트에 오염되지 않는 종목 선별력 지표입니다. 순위상관이므로 "시장
+    전체가 올랐다"는 사실로는 점수를 얻을 수 없고, **어느 종목이 상대적으로
+    더 올랐는가**를 맞혀야만 양수가 됩니다.
+
+    읽는 법: 실무에서 일별 IC 0.02~0.05 면 의미 있는 수준이고, 0.10 을 넘게
+    지속되면 오히려 누수를 의심합니다.
+
+    Args:
+        predictions: columns = [date, ticker, prediction, actual]
+        min_names: 이보다 종목이 적은 날짜는 제외 (소표본 순위상관은 잡음)
+    """
+    ics: list[float] = []
+    for _, g in predictions.groupby("date"):
+        g = g.dropna(subset=["prediction", "actual"])
+        if (
+            len(g) < min_names
+            or g["prediction"].nunique() < 2
+            or g["actual"].nunique() < 2
+        ):
+            continue
+        rho, _ = sps.spearmanr(g["prediction"], g["actual"])
+        if np.isfinite(rho):
+            ics.append(float(rho))
+    return float(np.mean(ics)) if ics else float("nan")
+
+
 # 문헌이 보고한 현실적 상한. UI 와 리포트에서 사용자 기대를 조정하는 데 씁니다.
 LITERATURE_BENCHMARKS = {
     "stock_monthly_r2_ml": 0.0040,  # Gu/Kelly/Xiu 신경망·트리 계열 상단
@@ -225,13 +255,27 @@ LITERATURE_BENCHMARKS = {
 }
 
 
-def sanity_check_r2(r2: float, horizon_days: int) -> str | None:
+def sanity_check_r2(
+    r2: float, horizon_days: int, target: str = "return"
+) -> str | None:
     """R² 가 문헌 최고 수준을 크게 넘으면 경고 문구를 반환합니다.
 
     좋은 결과를 축하하는 대신 의심하기 위한 장치입니다. 수익률 예측에서
     비정상적으로 높은 R² 의 가장 흔한 원인은 뛰어난 모형이 아니라 **데이터
     누수**입니다.
+
+    **수익률 예측에만 적용됩니다.** 0.33~0.40% 상한은 수익률 문헌의 수치이고,
+    변동성은 강한 자기상관(변동성 군집) 때문에 R² 수십%가 정상입니다. 실제
+    배포에서 변동성 R² 78%에 이 경고가 잘못 발동한 사례가 있습니다 -- 범주가
+    다른 잣대를 들이대는 것 자체가 오류입니다. 변동성의 진짜 시험대는 문헌
+    상한이 아니라 지속성 기준선(현재 변동성 유지)을 이기는가입니다.
+
+    또한 호출자는 **드리프트를 제거한 횡단면 R²** 를 넣어야 합니다. 기준선 0
+    대비 R² 에는 시장 전체 상승을 맞힌 몫이 포함되어, 강세장 유니버스에서는
+    누수 없이도 몇 %가 나옵니다.
     """
+    if target != "return":
+        return None
     if not np.isfinite(r2):
         return None
     # 월간(21영업일) 기준 문헌 상단을 기간에 맞춰 환산

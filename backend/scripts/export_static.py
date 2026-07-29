@@ -69,6 +69,20 @@ def main() -> int:
             try:
                 kr = ingest_kr_prices()
                 print(f"KR 수집: {kr.rows}행 / {kr.tickers}종목")
+                # 실패 원인을 반드시 로그에 남깁니다. 실제 배포에서 'KR 0행'만
+                # 찍히고 이유가 보이지 않아 진단이 불가능했던 사례가 있습니다 --
+                # 경고를 모아두고 출력하지 않으면 없는 것과 같습니다.
+                for w in kr.warnings[:3]:
+                    print(f"  KR 원인: {w}")
+                if len(kr.warnings) > 3:
+                    print(f"  … 외 {len(kr.warnings) - 3}건 (전부 유사한 오류)")
+                if kr.rows == 0:
+                    print(
+                        "  KR 진단 안내: 위 원인이 '이용신청'을 언급하면 "
+                        "openapi.krx.co.kr 에서 유가증권/코스닥 일별매매정보의 "
+                        "서비스 이용신청이 필요합니다. 연결 오류라면 KRX 가 "
+                        "해외(GitHub 러너) IP 를 차단했을 가능성이 있습니다."
+                    )
             except Exception as exc:  # noqa: BLE001 -- KR 실패가 US 배포를 막으면 안 됩니다
                 print(f"KR 수집 실패 (US 만 배포): {exc}")
         else:

@@ -102,7 +102,7 @@ export default function ForecastPage() {
 
       {data && (
         <>
-          <ForecastQualityPanel q={data.quality} />
+          <ForecastQualityPanel q={data.quality} target={data.target} />
 
           <h3>
             최신 예측 상위 종목 ({data.horizon_days}일 기준)

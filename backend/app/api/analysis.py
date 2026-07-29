@@ -75,18 +75,32 @@ class StockDetailOut(BaseModel):
 
 
 class ForecastQuality(BaseModel):
-    """예측의 아웃오브샘플 품질. 예측값과 항상 함께 반환됩니다."""
+    """예측의 아웃오브샘플 품질. 예측값과 항상 함께 반환됩니다.
+
+    타깃별로 판정 잣대가 다릅니다 -- 같은 잣대를 돌려쓰면 잘못된 경고가 납니다
+    (실제 배포에서 변동성 R² 78% 에 수익률 기준 누수 경고가 발동한 사례):
+
+        direction  -> skill score (기저율 대비). R² 는 판정 기준이 아님
+        return     -> 횡단면 R² (드리프트 제거) + IC. 기준선은 모멘텀 단독 모형
+        volatility -> R² 수십%가 정상. 기준선은 지속성(현재 변동성 유지)
+    """
 
     n_folds: int
     n_predictions: int
-    oos_r2: float | None
+    # 회귀 타깃용
+    oos_r2: float | None  # 기준선 0 대비. 시장 드리프트를 맞힌 몫 포함
+    oos_r2_cross: float | None  # 일별 횡단면 평균 대비. 종목 선별력만
+    mean_daily_ic: float | None  # 일별 순위상관 평균. 드리프트 무관
+    # 분류(방향) 타깃용
     brier: float | None
     reliability: float | None
     resolution: float | None
     skill_score: float | None
     ece: float | None
     reliability_curve: list[dict]
-    baseline_momentum_r2: float | None
+    # 타깃에 맞는 기준선과의 비교
+    baseline_label: str | None
+    baseline_r2: float | None
     beats_baseline: bool | None
     leakage_warning: str | None
     literature_context: str
@@ -313,18 +327,43 @@ def forecast(
         target=target,
         horizon_days=horizon_days,
         latest=_latest_scores(result, top_n),
-        quality=_quality(result, ranked, label_col, target, horizon_days),
+        quality=_quality(result, df, ranked, label_col, target, horizon_days, cfg),
         caveat=get_market(market).flow_caveat,
     )
 
 
-def _quality(result, df, label_col, target, horizon_days) -> ForecastQuality:
-    pred = result.predictions["prediction"]
-    actual = result.predictions["actual"]
+LITERATURE = {
+    "direction": (
+        "방향 예측의 판정 기준은 정확도나 R² 가 아니라 skill score(기저율 대비 "
+        "개선)입니다. 참고로 대형주 유니버스는 문헌상 방향 예측력이 가장 약한 "
+        "영역입니다 -- ML 의 우위는 소형·비유동 종목에 집중됩니다."
+    ),
+    "return": (
+        "문헌(Gu, Kelly, Xiu 2020) 기준 개별종목 월간 아웃오브샘플 R² 는 "
+        "0.33~0.40% 가 최고 수준입니다. 전체 R² 에는 시장 전체의 상승(드리프트)을 "
+        "맞힌 몫이 포함되므로, 종목 선별력은 횡단면 R² 와 IC 로 판단하십시오."
+    ),
+    "volatility": (
+        "변동성은 강한 자기상관(변동성 군집) 때문에 R² 수십%가 정상이며, 수익률 "
+        "기준(0.33~0.40%)을 적용하지 않습니다. 진짜 시험대는 '현재 변동성이 "
+        "유지된다'는 지속성 기준선을 이기는가입니다."
+    ),
+}
 
-    oos_r2 = None if target == "direction" else cal.out_of_sample_r2(pred, actual)
+
+def _quality(
+    result, raw_df, ranked_df, label_col, target, horizon_days, cfg
+) -> ForecastQuality:
+    preds = result.predictions
+    pred, actual = preds["prediction"], preds["actual"]
+
+    oos_r2 = oos_r2_cross = mean_ic = None
     brier = reliability = resolution = skill = ece = None
     curve: list[dict] = []
+    baseline_label = None
+    baseline_r2 = None
+    beats = None
+    warning = None
 
     if target == "direction":
         d = cal.brier_decomposition(pred, actual)
@@ -336,41 +375,88 @@ def _quality(result, df, label_col, target, horizon_days) -> ForecastQuality:
             .replace({np.nan: None})
             .to_dict("records")
         )
+    else:
+        oos_r2 = cal.out_of_sample_r2(pred, actual)
+        # 드리프트 제거: 같은 날짜 실제값의 횡단면 평균을 기준선으로. "시장이
+        # 올랐다"로는 점수를 얻을 수 없고 종목 간 우열을 맞혀야만 양수가 됩니다.
+        cross_bench = preds.groupby("date")["actual"].transform("mean")
+        oos_r2_cross = cal.out_of_sample_r2(pred, actual, benchmark=cross_bench)
+        mean_ic = cal.mean_daily_ic(preds)
 
-    # 모멘텀 단독 기준선 -- 복잡한 모형이 이걸 못 이기면 복잡도를 정당화할 수 없습니다
-    baseline_r2 = None
-    beats = None
-    if target != "direction" and "mom_12_1" in df.columns:
-        merged = result.predictions.merge(
-            df[["date", "ticker", "mom_12_1"]], on=["date", "ticker"], how="left"
-        )
-        if merged["mom_12_1"].notna().any():
-            baseline_r2 = cal.out_of_sample_r2(merged["mom_12_1"], merged["actual"])
-            beats = bool(
-                oos_r2 is not None and baseline_r2 is not None and oos_r2 > baseline_r2
+        if target == "return":
+            baseline_label, baseline_r2 = _momentum_model_baseline(
+                ranked_df, label_col, cfg
             )
+        else:  # volatility
+            baseline_label, baseline_r2 = _persistence_baseline(preds, raw_df)
 
-    warning = cal.sanity_check_r2(oos_r2, horizon_days) if oos_r2 is not None else None
+        if baseline_r2 is not None and oos_r2 is not None:
+            beats = bool(oos_r2 > baseline_r2)
+
+        # 누수 경고는 드리프트를 제거한 횡단면 R² 로만 판정합니다. 기준선 0
+        # 대비 R² 는 강세장에서 누수 없이도 몇 %가 나옵니다 (실측 확인).
+        warning = cal.sanity_check_r2(
+            oos_r2_cross if oos_r2_cross is not None else float("nan"),
+            horizon_days,
+            target=target,
+        )
 
     return ForecastQuality(
         n_folds=result.n_folds,
-        n_predictions=len(result.predictions),
+        n_predictions=len(preds),
         oos_r2=_f(oos_r2),
+        oos_r2_cross=_f(oos_r2_cross),
+        mean_daily_ic=_f(mean_ic),
         brier=_f(brier),
         reliability=_f(reliability),
         resolution=_f(resolution),
         skill_score=_f(skill),
         ece=_f(ece),
         reliability_curve=curve,
-        baseline_momentum_r2=_f(baseline_r2),
+        baseline_label=baseline_label,
+        baseline_r2=_f(baseline_r2),
         beats_baseline=beats,
         leakage_warning=warning,
-        literature_context=(
-            "문헌(Gu, Kelly, Xiu 2020) 기준 개별종목 월간 아웃오브샘플 R² 는 "
-            "0.33~0.40% 가 최고 수준입니다. 이보다 크게 높은 값은 성능이 아니라 "
-            "데이터 누수를 의심해야 합니다."
-        ),
+        literature_context=LITERATURE[target],
     )
+
+
+def _momentum_model_baseline(ranked_df, label_col, cfg) -> tuple[str | None, float | None]:
+    """수익률 기준선: 모멘텀 하나만 쓴 동일 조건 워크포워드 모형.
+
+    이전 구현은 0~1 순위값을 수익률 예측값으로 그대로 비교했는데, 그러면
+    '월 50% 수익률 예측'이 되어 R² 가 -3000% 같은 무의미한 수치가 나옵니다
+    (실제 배포에서 확인). 같은 릿지·같은 구간으로 학습한 모형끼리 비교해야
+    공정합니다.
+    """
+    if "mom_12_1" not in ranked_df.columns:
+        return None, None
+    baseline = mdl.walk_forward_predict(ranked_df, ["mom_12_1"], label_col, cfg)
+    if baseline.predictions.empty:
+        return None, None
+    r2 = cal.out_of_sample_r2(
+        baseline.predictions["prediction"], baseline.predictions["actual"]
+    )
+    return "모멘텀 단독 모형", _f(r2)
+
+
+def _persistence_baseline(preds, raw_df) -> tuple[str | None, float | None]:
+    """변동성 기준선: 지속성 -- 현재 변동성(vol_20d)이 그대로 유지된다고 예측.
+
+    변동성 예측에서 이기기 가장 어려운 기준선입니다. 모멘텀과 비교하는 것은
+    무의미합니다(재는 대상이 다름). raw_df 를 쓰는 이유: ranked_df 의 vol_20d
+    는 횡단면 순위(0~1)로 변환되어 있어 변동성 수준이 아닙니다.
+    """
+    if "vol_20d" not in raw_df.columns:
+        return None, None
+    merged = preds.merge(
+        raw_df[["date", "ticker", "vol_20d"]], on=["date", "ticker"], how="left"
+    )
+    valid = merged.dropna(subset=["vol_20d", "actual"])
+    if valid.empty:
+        return None, None
+    r2 = cal.out_of_sample_r2(valid["vol_20d"], valid["actual"])
+    return "지속성 (현재 변동성 유지)", _f(r2)
 
 
 def _latest_scores(result, top_n: int) -> list[dict]:

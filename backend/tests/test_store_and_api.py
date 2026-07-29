@@ -159,9 +159,42 @@ class TestAnalysisApi:
 
     def test_forecast_return_target_reports_r2(self, client):
         body = client.get("/api/forecast/US?target=return&horizon_days=21").json()
-        assert body["quality"]["oos_r2"] is not None
-        # 랜덤워크에서 R² 가 문헌 상단을 크게 넘으면 누수입니다
-        assert body["quality"]["leakage_warning"] is None
+        q = body["quality"]
+        assert q["oos_r2"] is not None
+        # 드리프트를 제거한 횡단면 지표가 함께 있어야 합니다
+        assert q["oos_r2_cross"] is not None
+        assert q["mean_daily_ic"] is not None
+        # 랜덤워크에서 횡단면 R² 가 문헌 상단을 크게 넘으면 누수입니다
+        assert q["leakage_warning"] is None
+        # 기준선은 순위값 직접 비교가 아니라 모멘텀 단독 '모형'이어야 합니다.
+        # (순위값 0~1 을 수익률 예측으로 쓰면 R² -3000% 같은 무의미한 수치가
+        # 나옵니다 -- 실제 배포에서 확인된 버그의 회귀 테스트)
+        assert q["baseline_label"] == "모멘텀 단독 모형"
+        if q["baseline_r2"] is not None:
+            assert q["baseline_r2"] > -1.0, "기준선 R² 가 비상식적입니다"
+
+    def test_volatility_target_uses_persistence_not_return_yardstick(self, client):
+        """변동성 예측의 판정 잣대는 수익률과 다릅니다.
+
+        실제 배포에서 변동성 R² 78% 에 수익률 기준(0.4%) 누수 경고가 발동한
+        버그의 회귀 테스트입니다. 변동성은 군집성 때문에 높은 R² 가 정상이며,
+        기준선은 모멘텀이 아니라 지속성(현재 변동성 유지)이어야 합니다.
+        """
+        body = client.get("/api/forecast/US?target=volatility&horizon_days=21").json()
+        q = body["quality"]
+        # 수익률 잣대의 누수 경고가 변동성에 발동하면 안 됩니다
+        assert q["leakage_warning"] is None
+        assert q["baseline_label"] == "지속성 (현재 변동성 유지)"
+        assert q["baseline_r2"] is not None
+        # 변동성 문헌 안내가 수익률 안내와 달라야 합니다
+        assert "군집" in q["literature_context"]
+
+    def test_direction_target_reports_skill_not_r2(self, client):
+        body = client.get("/api/forecast/US?target=direction&horizon_days=21").json()
+        q = body["quality"]
+        assert q["skill_score"] is not None
+        assert q["oos_r2"] is None  # 방향의 판정 기준이 아님
+        assert q["baseline_label"] is None  # skill score 가 이미 기저율 대비
 
     def test_forecast_on_market_without_data_is_409(self, client):
         """오류가 아니라 '데이터를 먼저 수집하라'는 안내여야 합니다."""

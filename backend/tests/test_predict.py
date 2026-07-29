@@ -119,6 +119,60 @@ class TestOutOfSampleR2:
         """문헌 수준(월간 0.4%)은 경고 대상이 아닙니다."""
         assert cal.sanity_check_r2(0.004, horizon_days=21) is None
 
+    def test_sanity_check_does_not_apply_return_yardstick_to_volatility(self):
+        """변동성 R² 수십%는 정상입니다 (변동성 군집).
+
+        수익률 문헌 상한(0.4%)을 변동성에 적용해 R² 78% 에 누수 경고가 발동한
+        실배포 버그의 회귀 테스트입니다.
+        """
+        assert cal.sanity_check_r2(0.78, horizon_days=21, target="volatility") is None
+        # 수익률에는 여전히 적용되어야 합니다
+        assert cal.sanity_check_r2(0.78, horizon_days=21, target="return") is not None
+
+
+class TestMeanDailyIc:
+    def test_drift_alone_earns_zero_ic(self):
+        """모든 종목에 같은 값을 예측하면(=드리프트만 알면) IC 는 0 이어야 합니다.
+
+        이것이 IC 를 드리프트 무관 지표로 쓰는 근거입니다.
+        """
+        rng = np.random.default_rng(1)
+        dates = pd.to_datetime(["2024-01-02"] * 20 + ["2024-01-03"] * 20)
+        preds = pd.DataFrame(
+            {
+                "date": dates,
+                "ticker": [f"T{i}" for i in range(20)] * 2,
+                "prediction": 0.05,  # 전 종목 동일
+                "actual": rng.normal(0.05, 0.02, 40),
+            }
+        )
+        ic = cal.mean_daily_ic(preds)
+        assert np.isnan(ic), "상수 예측은 순위를 만들 수 없으므로 IC 미정의"
+
+    def test_perfect_ranking_earns_ic_one(self):
+        dates = pd.to_datetime(["2024-01-02"] * 10)
+        preds = pd.DataFrame(
+            {
+                "date": dates,
+                "ticker": [f"T{i}" for i in range(10)],
+                "prediction": np.arange(10, dtype=float),
+                "actual": np.arange(10, dtype=float) * 0.01,
+            }
+        )
+        assert cal.mean_daily_ic(preds) == pytest.approx(1.0)
+
+    def test_small_days_are_excluded(self):
+        """종목 수가 적은 날의 순위상관은 잡음이므로 제외합니다."""
+        preds = pd.DataFrame(
+            {
+                "date": pd.to_datetime(["2024-01-02"] * 3),
+                "ticker": ["A", "B", "C"],
+                "prediction": [1.0, 2.0, 3.0],
+                "actual": [0.01, 0.02, 0.03],
+            }
+        )
+        assert np.isnan(cal.mean_daily_ic(preds, min_names=5))
+
 
 # ── 특성·라벨 ────────────────────────────────────────────────────────────
 class TestFeaturesAndLabels:

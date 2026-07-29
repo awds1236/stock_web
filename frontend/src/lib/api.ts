@@ -56,7 +56,9 @@ export type StockDetail = {
 export type ForecastQuality = {
   n_folds: number;
   n_predictions: number;
-  oos_r2: number | null;
+  oos_r2: number | null; // 기준선 0 대비. 시장 드리프트 포함
+  oos_r2_cross: number | null; // 횡단면 평균 대비. 종목 선별력만
+  mean_daily_ic: number | null; // 일별 순위상관 평균. 드리프트 무관
   brier: number | null;
   reliability: number | null;
   resolution: number | null;
@@ -69,7 +71,8 @@ export type ForecastQuality = {
     predicted: number | null;
     observed: number | null;
   }[];
-  baseline_momentum_r2: number | null;
+  baseline_label: string | null;
+  baseline_r2: number | null;
   beats_baseline: boolean | null;
   leakage_warning: string | null;
   literature_context: string;

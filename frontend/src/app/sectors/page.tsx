@@ -1,6 +1,7 @@
 "use client";
 
 import { api, pct, type SectorRow } from "@/lib/api";
+import { sectorLabel } from "@/lib/sectorNames";
 import { useEffect, useState } from "react";
 
 export default function SectorsPage() {
@@ -62,7 +63,7 @@ export default function SectorsPage() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.sector}>
-                    <td>{r.sector}</td>
+                    <td>{sectorLabel(r.sector)}</td>
                     <td className={`num ${cls(r.ret_20d)}`}>{pct(r.ret_20d)}</td>
                     <td className={`num ${cls(r.ret_60d)}`}>{pct(r.ret_60d)}</td>
                     <td className={`num ${cls(r.relative_strength_60d)}`}>

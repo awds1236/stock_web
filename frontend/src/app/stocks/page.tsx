@@ -1,6 +1,7 @@
 "use client";
 
 import { api, type StockDetail, type UniverseItem } from "@/lib/api";
+import { sectorLabel } from "@/lib/sectorNames";
 import { useCallback, useEffect, useState } from "react";
 import {
   CartesianGrid,
@@ -21,6 +22,11 @@ export default function StocksPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // 시장을 바꾸면 이전 시장의 상세를 즉시 지웁니다. 지우지 않으면 "데이터
+    // 없음" 배너 아래에 이전 시장의 차트가 남아, 없는 데이터가 있는 것처럼
+    // 보입니다 (실배포에서 확인된 버그).
+    setDetail(null);
+    setUniverse([]);
     api
       .universe(market)
       .then((u) => {
@@ -28,7 +34,10 @@ export default function StocksPage() {
         setTicker(u.length ? u[0].ticker : null);
         setError(u.length ? null : "이 시장에 수집된 데이터가 없습니다.");
       })
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+      .catch((e) => {
+        setTicker(null);
+        setError(e instanceof Error ? e.message : String(e));
+      });
   }, [market]);
 
   const load = useCallback(async () => {
@@ -82,7 +91,7 @@ export default function StocksPage() {
               <option key={u.ticker} value={u.ticker}>
                 {u.ticker}
                 {u.name ? ` — ${u.name}` : ""}
-                {u.sector ? ` (${u.sector})` : ""}
+                {u.sector ? ` · ${sectorLabel(u.sector)}` : ""}
               </option>
             ))}
           </select>
@@ -101,7 +110,7 @@ export default function StocksPage() {
           <h3>
             {detail.ticker}
             {detail.sector ? (
-              <span className="muted"> · {detail.sector}</span>
+              <span className="muted"> · {sectorLabel(detail.sector)}</span>
             ) : null}
           </h3>
 
