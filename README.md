@@ -65,8 +65,33 @@ uv run pytest tests/ -q          # 61 passed
 
 ```bash
 cp backend/.env.example backend/.env
-# KRX_AUTH_KEY 입력 (https://openapi.krx.co.kr 에서 발급, 일 10,000회 제한)
+git config core.hooksPath .githooks    # 비밀정보 커밋 차단 훅 설치 (1회)
 ```
+
+`backend/.env` 에 입력:
+
+| 변수 | 발급처 | 비고 |
+|---|---|---|
+| `KRX_AUTH_KEY` | [openapi.krx.co.kr](https://openapi.krx.co.kr/) | 인증키 신청 **후 서비스별 이용신청 별도 필요**. 일 10,000회 |
+| `SEC_USER_AGENT` | 발급 불필요 | `이름 email@example.com` 형식. SEC 는 키 대신 실제 연락처를 요구합니다 |
+
+미국 시세(yfinance)는 키가 필요 없습니다.
+
+### 비밀정보 관리
+
+키는 **저장소에 들어가지 않습니다.** 세 겹으로 막습니다:
+
+1. `.gitignore` — `.env` 는 추적되지 않음
+2. `.githooks/pre-commit` — 스테이징된 내용에서 값이 채워진 비밀 변수를 차단.
+   `.gitignore` 만으로는 `git add -f` 나 코드에 하드코딩한 키를 막지 못합니다
+3. `tests/test_no_secrets_committed.py` — 추적 중인 파일 전체를 검사. 훅을 안
+   깔았거나 `--no-verify` 로 우회한 경우에도 CI 에서 걸립니다
+
+**배포 시에는 `.env` 파일을 올리지 말고 호스팅 플랫폼의 환경변수로 주입하십시오.**
+`app/config.py` 는 환경변수를 우선하므로 코드 변경이 필요 없습니다.
+
+키가 이미 유출됐다면 히스토리에서 지우는 것으로는 부족합니다 — **폐기하고
+재발급**하는 것이 유일하게 확실한 대응입니다.
 
 거래비용 세율은 **의도적으로 자리표시자**입니다. 한국 증권거래세율은 최근 수년간
 반복적으로 바뀌었으므로, 백테스트 전에 현행 세율을 확인해 `.env`에 넣으십시오.

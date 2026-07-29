@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# 커밋 전 비밀정보 차단.
+#
+# .gitignore 는 '실수로 add 하지 않도록' 도와줄 뿐, 강제하지 못합니다.
+# `git add -f`, 다른 경로에 적은 키, 코드에 하드코딩한 값은 그대로 통과합니다.
+# 이 훅은 **스테이징된 내용 자체**를 검사합니다.
+#
+# 설치:  git config core.hooksPath .githooks
+# 우회:  git commit --no-verify   (정말 필요할 때만)
+
+set -uo pipefail
+
+fail=0
+red() { printf '\033[31m%s\033[0m\n' "$1"; }
+yellow() { printf '\033[33m%s\033[0m\n' "$1"; }
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# ── 1. .env 파일 자체가 스테이징된 경우 ────────────────────────────────
+while IFS= read -r file; do
+    case "$(basename "$file")" in
+        .env|.env.*)
+            if [ "$(basename "$file")" != ".env.example" ]; then
+                red "차단: $file -- .env 파일은 커밋할 수 없습니다."
+                fail=1
+            fi
+            ;;
+    esac
+done <<< "$staged"
+
+# ── 2. 스테이징된 내용에서 값이 채워진 비밀 키 탐지 ────────────────────
+# 자리표시자(빈 값, YOUR_..., xxx, <...>)는 통과시킵니다.
+SECRET_VARS='KRX_AUTH_KEY|SEC_USER_AGENT|.*_API_KEY|.*_SECRET|.*_TOKEN|.*_PASSWORD'
+
+while IFS= read -r file; do
+    [ -f "$file" ] || continue
+    # .env.example 은 자리표시자만 있으면 되므로 별도 규칙(아래 3번)으로 검사
+    [ "$(basename "$file")" = ".env.example" ] && continue
+
+    matches=$(git show ":$file" 2>/dev/null \
+        | grep -nEi "^[[:space:]]*(export[[:space:]]+)?($SECRET_VARS)[[:space:]]*=" \
+        || true)
+    [ -z "$matches" ] && continue
+
+    while IFS= read -r line; do
+        value="${line#*=}"
+        value="$(printf '%s' "$value" | tr -d '"'"'"' \r')"
+        # 빈 값·자리표시자는 허용
+        case "$value" in
+            ""|YOUR*|your*|CHANGE*|change*|xxx*|XXX*|\<*|"발급받은키"*|"여기에"*) continue ;;
+        esac
+        # 예제 이메일은 허용
+        case "$value" in
+            *your@email.com*|*example.com*) continue ;;
+        esac
+        red "차단: $file:${line%%:*} -- 값이 채워진 비밀 변수"
+        yellow "       ${line%%=*}=***"
+        fail=1
+    done <<< "$matches"
+done <<< "$staged"
+
+# ── 3. .env.example 에 실제 값이 들어간 경우 ───────────────────────────
+if printf '%s\n' "$staged" | grep -q '\.env\.example$'; then
+    example=$(printf '%s\n' "$staged" | grep '\.env\.example$' | head -1)
+    bad=$(git show ":$example" 2>/dev/null \
+        | grep -nE "^[[:space:]]*(KRX_AUTH_KEY)[[:space:]]*=[[:space:]]*[^[:space:]]" \
+        || true)
+    if [ -n "$bad" ]; then
+        red "차단: $example -- 템플릿에 실제 키가 들어갔습니다. 값은 비워두십시오."
+        fail=1
+    fi
+fi
+
+if [ "$fail" -ne 0 ]; then
+    echo
+    yellow "비밀정보는 backend/.env 에 두십시오 (커밋되지 않습니다)."
+    yellow "배포 환경에서는 파일 대신 환경변수로 주입하십시오."
+    yellow "정말 의도한 커밋이라면: git commit --no-verify"
+    exit 1
+fi
+
+exit 0
