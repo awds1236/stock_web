@@ -1,0 +1,30 @@
+# 비밀정보 -- 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# 데이터 (재생성 가능, 용량이 큼)
+backend/data/
+*.duckdb
+*.duckdb.wal
+
+# Node / Next.js
+node_modules/
+.next/
+out/
+.turbo/
+
+# OS / 편집기
+.DS_Store
+*.swp
+.idea/
+.vscode/
