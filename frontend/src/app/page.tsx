@@ -1,12 +1,13 @@
 "use client";
 
-import { api, type Coverage } from "@/lib/api";
+import { api, IS_STATIC, type Coverage } from "@/lib/api";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const [coverage, setCoverage] = useState<Coverage[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [generatedAt, setGeneratedAt] = useState<string | null>(null);
   const [message, setMessage] = useState<{
     tone: "info" | "warn" | "bad";
     title: string;
@@ -19,9 +20,20 @@ export default function Home() {
     } catch (e) {
       setMessage({
         tone: "bad",
-        title: "백엔드에 연결할 수 없습니다",
-        body: `backend 가 실행 중인지 확인하십시오: uv run uvicorn app.main:app --port 8000 (${String(e)})`,
+        title: IS_STATIC
+          ? "데이터 스냅샷을 불러올 수 없습니다"
+          : "백엔드에 연결할 수 없습니다",
+        body: IS_STATIC
+          ? `배포 워크플로가 성공했는지 확인하십시오. (${String(e)})`
+          : `backend 가 실행 중인지 확인하십시오: uv run uvicorn app.main:app --port 8000 (${String(e)})`,
       });
+    }
+    if (IS_STATIC) {
+      // 스냅샷 생성 시각 -- 없어도 치명적이지 않으므로 조용히 무시합니다.
+      api
+        .buildInfo()
+        .then((b) => setGeneratedAt(b.generated_at))
+        .catch(() => {});
     }
   }, []);
 
@@ -72,7 +84,17 @@ export default function Home() {
         </div>
       )}
 
-      {us && !us.ready && (
+      {IS_STATIC && (
+        <div className="banner info">
+          <strong>GitHub Pages 정적 스냅샷</strong>
+          이 사이트는 GitHub Actions 가 주기적으로 생성하는 스냅샷입니다.
+          {generatedAt &&
+            ` 마지막 갱신: ${generatedAt.slice(0, 16).replace("T", " ")} UTC.`}{" "}
+          수집·설정 기능은 로컬 실행에서만 동작합니다.
+        </div>
+      )}
+
+      {!IS_STATIC && us && !us.ready && (
         <div className="banner info">
           <strong>여기서 시작하세요 — 미국 주식은 인증키가 필요 없습니다</strong>
           아래 &quot;미국 데이터 수집&quot;을 누르면 바로 분석을 시작할 수
@@ -113,7 +135,15 @@ export default function Home() {
               </tbody>
             </table>
 
-            {c.needs_credential ? (
+            {IS_STATIC ? (
+              <div className="caveat" style={{ marginTop: 12 }}>
+                {c.ready
+                  ? "GitHub Actions 가 자동 갱신합니다."
+                  : c.market === "KR"
+                    ? "한국 데이터는 저장소 Secrets 에 KRX_AUTH_KEY 를 추가하면 다음 배포부터 포함됩니다."
+                    : "다음 배포에서 갱신됩니다."}
+              </div>
+            ) : c.needs_credential ? (
               <div style={{ marginTop: 12 }}>
                 <div className="caveat">
                   이 시장은 <code>{c.needs_credential}</code> 인증키가 필요합니다.

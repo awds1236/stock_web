@@ -1,9 +1,31 @@
 "use client";
 
-import { api, type Credential } from "@/lib/api";
+import { api, IS_STATIC, type Credential } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 
 export default function SettingsPage() {
+  // 정적 배포에는 백엔드가 없으므로 설정 화면 자체가 동작할 수 없습니다.
+  // 빈 화면이나 알 수 없는 오류 대신 이유와 대안을 말합니다.
+  if (IS_STATIC) {
+    return (
+      <>
+        <h2>설정</h2>
+        <div className="banner info">
+          <strong>정적 배포에서는 설정을 사용할 수 없습니다</strong>
+          GitHub Pages 는 정적 파일만 서빙하므로 인증정보를 저장할 백엔드가
+          없습니다. 한국(KRX) 데이터를 포함하려면 저장소의{" "}
+          <code>Settings → Secrets and variables → Actions</code> 에{" "}
+          <code>KRX_AUTH_KEY</code> secret 을 추가하십시오 — 다음 배포부터
+          반영됩니다. 로컬 실행(백엔드 포함)에서는 이 화면에서 직접 입력할 수
+          있습니다.
+        </div>
+      </>
+    );
+  }
+  return <SettingsInner />;
+}
+
+function SettingsInner() {
   const [creds, setCreds] = useState<Credential[]>([]);
   const [warning, setWarning] = useState("");
   const [inputs, setInputs] = useState<Record<string, string>>({});

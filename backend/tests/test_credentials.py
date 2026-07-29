@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import json
+import os
 import stat
 
 import pytest
@@ -64,12 +65,27 @@ class TestCredentialStore:
             mode = path.stat().st_mode
             assert not mode & (stat.S_IRWXG | stat.S_IRWXO), f"{path} 권한이 개방적"
 
+    @pytest.mark.skipif(os.name == "nt", reason="POSIX 권한 검사는 Windows 미적용")
     def test_loose_permissions_are_rejected(self, tmp_store):
         """권한이 느슨해졌으면 조용히 넘어가지 않아야 합니다."""
         tmp_store.set("KRX_AUTH_KEY", REAL_KEY)
         tmp_store.key_path.chmod(0o644)
         with pytest.raises(CredentialError, match="권한"):
             tmp_store.get_stored("KRX_AUTH_KEY")
+
+    def test_permission_check_is_skipped_on_windows(self, tmp_store, monkeypatch):
+        """Windows 에서는 st_mode 가 항상 '개방적'으로 보고되므로 검사를 건너뜁니다.
+
+        건너뛰지 않으면 Windows 사용자는 키를 저장하는 순간부터 모든 조회가
+        실패합니다 (실사용에서 발생한 버그의 회귀 테스트).
+        """
+        import app.credentials as cred_mod
+
+        tmp_store.set("KRX_AUTH_KEY", REAL_KEY)
+        tmp_store.store_path.chmod(0o666)  # Windows 가 보고하는 형태를 재현
+        tmp_store.key_path.chmod(0o666)
+        monkeypatch.setattr(cred_mod.os, "name", "nt")
+        assert tmp_store.get_stored("KRX_AUTH_KEY") == REAL_KEY
 
     def test_delete_removes_value(self, tmp_store):
         tmp_store.set("KRX_AUTH_KEY", REAL_KEY)

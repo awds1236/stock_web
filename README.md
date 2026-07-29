@@ -133,10 +133,49 @@ npm run dev        # http://localhost:3000
   데이터에서 12종목은 R² +0.028, 40종목은 -0.002 가 나왔습니다.
   **수십 종목 미만 유니버스의 R² 는 신뢰하지 마십시오.**
 
+## GitHub Pages 호스팅
+
+GitHub Pages 는 **정적 파일만** 서빙하므로 백엔드가 거기서 돌 수 없습니다.
+대신 `.github/workflows/pages.yml` 이 이렇게 동작합니다:
+
+```
+GitHub Actions (매 영업일 22:30 UTC + push + 수동 실행)
+  → CI 러너에서 데이터 수집·예측 계산 (미국은 키 불필요)
+  → API 응답을 JSON 스냅샷으로 고정 (scripts/export_static.py)
+  → Next.js 정적 빌드 (output: 'export')
+  → https://<계정>.github.io/stock_web/ 에 배포
+```
+
+### 활성화 방법
+
+1. 이 브랜치를 푸시하면 워크플로가 실행되고 Pages 가 자동 활성화됩니다.
+   안 되면: 저장소 **Settings → Pages → Source** 를 **GitHub Actions** 로 설정.
+2. Actions 탭에서 "Deploy GitHub Pages" 실행 확인 → 완료되면
+   `https://<계정>.github.io/stock_web/` 접속.
+
+### 한국 데이터 포함 (선택)
+
+키를 저장소 파일에 넣지 않고 **repo secret** 으로 주입합니다:
+**Settings → Secrets and variables → Actions → New repository secret** 에
+`KRX_AUTH_KEY` 추가 → 다음 배포부터 한국 데이터가 포함됩니다.
+secret 이 없으면 미국만 배포됩니다.
+
+### 정적 배포의 한계 (의도된 것)
+
+| | 로컬 실행 | GitHub Pages |
+|---|---|---|
+| 데이터 갱신 | 버튼으로 즉시 | Actions 스케줄 (매 영업일) |
+| 예측 기간 | 5/21/63일 | **21일만** (CI 시간 절약) |
+| 설정(인증키 입력) | 가능 | 불가 — secret 으로 대체 |
+| 저장소 공개 시 | — | **사이트도 공개됨** (무료 플랜의 Pages 는 항상 공개) |
+
+주의: 무료 플랜에서 Pages 사이트는 저장소가 private 이어도 **항상 공개**입니다.
+스냅샷에는 시세·지표·예측만 담기며 인증키는 어디에도 포함되지 않습니다.
+
 ## 테스트
 
 ```bash
-cd backend && uv run pytest tests/ -q      # 183 passed
+cd backend && uv run pytest tests/ -q      # 184 passed
 ```
 
 ### 설정

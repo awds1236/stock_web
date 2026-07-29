@@ -1,7 +1,7 @@
 "use client";
 
 import { ForecastQualityPanel } from "@/components/ForecastQualityPanel";
-import { api, type Forecast } from "@/lib/api";
+import { api, IS_STATIC, STATIC_HORIZON, type Forecast } from "@/lib/api";
 import { useCallback, useEffect, useState } from "react";
 
 const TARGETS = [
@@ -74,9 +74,11 @@ export default function ForecastPage() {
             value={horizon}
             onChange={(e) => setHorizon(Number(e.target.value))}
           >
-            <option value={5}>5일</option>
-            <option value={21}>21일 (1개월)</option>
-            <option value={63}>63일 (3개월)</option>
+            {/* 정적 스냅샷에는 21일 예측만 포함됩니다. 선택해도 실패할 옵션을
+                보여주는 대신 처음부터 빼둡니다. */}
+            {!IS_STATIC && <option value={5}>5일</option>}
+            <option value={STATIC_HORIZON}>21일 (1개월)</option>
+            {!IS_STATIC && <option value={63}>63일 (3개월)</option>}
           </select>
           <button onClick={run} disabled={loading}>
             {loading ? "계산 중…" : "다시 계산"}

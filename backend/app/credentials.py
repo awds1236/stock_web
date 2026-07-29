@@ -119,7 +119,16 @@ class CredentialStore:
 
     @staticmethod
     def _require_private(path: Path) -> None:
-        """권한이 느슨해졌으면 조용히 넘어가지 않고 알립니다."""
+        """권한이 느슨해졌으면 조용히 넘어가지 않고 알립니다.
+
+        Windows(NTFS)에서는 이 검사를 건너뜁니다. NTFS 는 POSIX 권한 비트를
+        쓰지 않아 Python 의 st_mode 가 모든 파일을 '그룹/기타 읽기 가능'으로
+        보고하므로, 검사를 그대로 적용하면 **정상 파일까지 전부 거부**됩니다
+        (실사용에서 확인된 버그). Windows 의 접근 제어는 NTFS ACL 과 사용자
+        프로필 디렉터리가 담당합니다.
+        """
+        if os.name == "nt":
+            return
         mode = path.stat().st_mode
         if mode & (stat.S_IRWXG | stat.S_IRWXO):
             raise CredentialError(

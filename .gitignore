@@ -28,3 +28,7 @@ out/
 *.swp
 .idea/
 .vscode/
+
+# 정적 배포 산출물 (CI 가 생성)
+frontend/out/
+frontend/public/data/

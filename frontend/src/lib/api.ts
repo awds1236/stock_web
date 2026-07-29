@@ -113,6 +113,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * 정적 모드 (GitHub Pages).
+ *
+ * Pages 는 정적 파일만 서빙하므로 백엔드가 없습니다. 빌드 시
+ * NEXT_PUBLIC_STATIC=1 이면 /api/* 대신 CI 가 생성해 둔 JSON 스냅샷
+ * (/data/*.json)을 읽습니다. 쓰기 동작(수집·인증정보)은 정적 배포에서
+ * 불가능하며, 되는 척하는 대신 명확한 메시지로 실패합니다.
+ */
+export const IS_STATIC = process.env.NEXT_PUBLIC_STATIC === "1";
+const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
+export const STATIC_HORIZON = 21;
+
+const STATIC_WRITE_MSG =
+  "정적 배포(GitHub Pages)에서는 이 동작을 실행할 수 없습니다. 데이터는 " +
+  "GitHub Actions 가 스케줄에 따라 자동 갱신하며, 설정·수집은 로컬 실행" +
+  "(백엔드 포함)에서만 가능합니다.";
+
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(path, { cache: "no-store", ...init });
   if (!res.ok) {
@@ -130,37 +147,92 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function staticFile<T>(name: string): Promise<T> {
+  const res = await fetch(`${BASE}/data/${name}`, { cache: "no-store" });
+  if (!res.ok) {
+    throw new ApiError(
+      res.status === 404
+        ? "이 정적 스냅샷에는 해당 데이터가 포함되어 있지 않습니다. " +
+          "(예: 한국 데이터는 저장소에 KRX_AUTH_KEY secret 이 설정된 경우에만 " +
+          "포함됩니다)"
+        : `정적 데이터 로드 실패: HTTP ${res.status}`,
+      res.status,
+    );
+  }
+  return res.json();
+}
+
+function staticWriteBlocked(): never {
+  throw new ApiError(STATIC_WRITE_MSG, 501);
+}
+
 export const api = {
-  coverage: () => req<Coverage[]>("/api/coverage"),
-  universe: (market: string) => req<UniverseItem[]>(`/api/universe/${market}`),
+  coverage: () =>
+    IS_STATIC
+      ? staticFile<Coverage[]>("coverage.json")
+      : req<Coverage[]>("/api/coverage"),
+  universe: (market: string) =>
+    IS_STATIC
+      ? staticFile<UniverseItem[]>(`universe-${market}.json`)
+      : req<UniverseItem[]>(`/api/universe/${market}`),
   stock: (market: string, ticker: string) =>
-    req<StockDetail>(`/api/stocks/${market}/${ticker}`),
-  forecast: (market: string, target: string, horizon: number) =>
-    req<Forecast>(
-      `/api/forecast/${market}?target=${target}&horizon_days=${horizon}`,
-    ),
-  sectors: (market: string) => req<SectorRow[]>(`/api/sectors/${market}`),
+    IS_STATIC
+      ? staticFile<StockDetail>(`stocks-${market}-${ticker}.json`)
+      : req<StockDetail>(`/api/stocks/${market}/${ticker}`),
+  forecast: (market: string, target: string, horizon: number) => {
+    if (!IS_STATIC)
+      return req<Forecast>(
+        `/api/forecast/${market}?target=${target}&horizon_days=${horizon}`,
+      );
+    // 스냅샷에는 21일 예측만 포함됩니다. 없는 조합을 404 로 흘리는 대신
+    // 이유를 말합니다.
+    if (horizon !== STATIC_HORIZON)
+      throw new ApiError(
+        `정적 스냅샷에는 ${STATIC_HORIZON}일 예측만 포함됩니다. 다른 기간은 ` +
+          "로컬 실행에서 계산할 수 있습니다.",
+        404,
+      );
+    return staticFile<Forecast>(
+      `forecast-${market}-${target}-${STATIC_HORIZON}.json`,
+    );
+  },
+  sectors: (market: string) =>
+    IS_STATIC
+      ? staticFile<SectorRow[]>(`sectors-${market}.json`)
+      : req<SectorRow[]>(`/api/sectors/${market}`),
+  buildInfo: () =>
+    staticFile<{ generated_at: string; note: string }>("build-info.json"),
   credentials: () =>
-    req<{ credentials: Credential[]; warning: string }>(
-      "/api/settings/credentials",
-    ),
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<{ credentials: Credential[]; warning: string }>(
+          "/api/settings/credentials",
+        ),
   setCredential: (name: string, value: string) =>
-    req<Credential>(`/api/settings/credentials/${name}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ value }),
-    }),
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<Credential>(`/api/settings/credentials/${name}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value }),
+        }),
   deleteCredential: (name: string) =>
-    req<Credential>(`/api/settings/credentials/${name}`, { method: "DELETE" }),
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<Credential>(`/api/settings/credentials/${name}`, {
+          method: "DELETE",
+        }),
   ingest: (market: string, years = 10) =>
-    req<{
-      market: string;
-      rows: number;
-      tickers: number;
-      start: string | null;
-      end: string | null;
-      warnings: string[];
-    }>(`/api/ingest/${market}?years=${years}`, { method: "POST" }),
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<{
+          market: string;
+          rows: number;
+          tickers: number;
+          start: string | null;
+          end: string | null;
+          warnings: string[];
+        }>(`/api/ingest/${market}?years=${years}`, { method: "POST" }),
 };
 
 export const pct = (v: number | null | undefined, digits = 2) =>
