@@ -87,12 +87,56 @@ Gu, Kelly, Xiu (2020)가 900개 이상의 예측변수로 측정한 개별종목
 → **미국 백테스트 성과는 생존편향으로 과대평가됩니다.** 한국(KRX)에는 이 문제가
 없습니다. 완화 방법은 [methodology 4-A절](docs/methodology.md) 참조.
 
-## 시작하기
+## 실행 방법
+
+터미널 두 개가 필요합니다.
 
 ```bash
+# 터미널 1 — 백엔드
 cd backend
 uv venv && uv pip install -e ".[dev]"
-uv run pytest tests/ -q          # 61 passed
+uv run uvicorn app.main:app --port 8000
+
+# 터미널 2 — 프론트엔드
+cd frontend
+npm install
+npm run dev        # http://localhost:3000
+```
+
+브라우저에서 `http://localhost:3000` 을 엽니다.
+
+### 미국 주식은 인증키 없이 바로 시작합니다
+
+개요 화면의 **&ldquo;미국 데이터 수집&rdquo;** 버튼을 누르면 yfinance 로 10년치를
+받아옵니다. 키 발급 없이 종목 분석·섹터 분석·예측을 모두 쓸 수 있습니다.
+한국 주식만 KRX 인증키가 필요하며, 설정 화면에서 입력합니다.
+
+### 화면
+
+| 경로 | 내용 |
+|---|---|
+| `/` | 데이터 현황, 수집 실행 |
+| `/stocks` | 가격·이동평균·RSI 차트 + **지표별 해석과 한계** |
+| `/sectors` | 섹터 수익률·상대강도·breadth |
+| `/forecast` | 보정된 확률 + **신뢰도 곡선과 skill score** |
+| `/settings` | 인증정보 입력 (암호화 저장) |
+| `/methodology` | 예측 성능의 현실적 상한과 근거 논문 |
+
+예측 화면은 모형이 쓸모없으면 **쓸모없다고 크게 표시합니다.** skill score 가 0
+이하이면 &ldquo;이 예측을 매매 근거로 삼지 마십시오&rdquo; 배너가 뜹니다.
+
+### 알려진 제약
+
+- **DuckDB 는 쓰기 프로세스를 하나만 허용합니다.** API 서버와 수집 스크립트를
+  동시에 돌리면 503 과 함께 안내 메시지가 나옵니다.
+- 종목 수가 적으면 아웃오브샘플 R² 추정치의 분산이 매우 큽니다. 신호 없는
+  데이터에서 12종목은 R² +0.028, 40종목은 -0.002 가 나왔습니다.
+  **수십 종목 미만 유니버스의 R² 는 신뢰하지 마십시오.**
+
+## 테스트
+
+```bash
+cd backend && uv run pytest tests/ -q      # 183 passed
 ```
 
 ### 설정

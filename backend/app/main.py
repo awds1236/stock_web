@@ -9,12 +9,15 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from app.api.analysis import router as analysis_router
 from app.api.settings_router import router as settings_router
 from app.config import settings
 from app.markets import MARKETS
+from app.store import StoreLocked
 
 
 @asynccontextmanager
@@ -42,6 +45,17 @@ app.add_middleware(
 )
 
 app.include_router(settings_router)
+app.include_router(analysis_router)
+
+
+@app.exception_handler(StoreLocked)
+async def _store_locked(_request: Request, exc: StoreLocked) -> JSONResponse:
+    """DB 락은 500 이 아니라 '지금은 불가, 이렇게 하면 됨' 상태입니다.
+
+    불투명한 500 을 그대로 내보내면 사용자는 앱이 고장난 줄 압니다. 실제로는
+    수집 스크립트를 종료하기만 하면 되는 상황입니다.
+    """
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.get("/api/health")
