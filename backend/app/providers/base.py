@@ -67,3 +67,13 @@ class ProviderError(RuntimeError):
 
 class CallBudgetExceeded(ProviderError):
     """일일 호출 한도 초과. 조용히 빈 데이터를 반환하는 것보다 터지는 편이 낫습니다."""
+
+
+class NotSubscribed(ProviderError):
+    """서비스 이용신청이 안 된 엔드포인트.
+
+    KRX 는 인증키 발급과 **서비스별 이용신청**이 별개입니다. 이용신청을 안 하면
+    엔드포인트가 존재해도 접근할 수 없는데, 이것을 '엔드포인트 없음'과 혼동하면
+    Phase 0 판정이 틀어집니다 -- 있는 데이터를 없다고 결론짓고 불필요한 대체
+    경로를 구축하게 됩니다. 그래서 별도 예외로 구분합니다.
+    """

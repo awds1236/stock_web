@@ -22,8 +22,19 @@ import httpx
 import pandas as pd
 
 from app.config import settings
-from app.providers.base import PriceProvider, ProviderError
+from app.providers.base import NotSubscribed, PriceProvider, ProviderError
 from app.providers.cache import CallBudget, DiskCache
+
+# 미신청 서비스일 때 KRX 응답 본문에 나타나는 신호들
+_ERROR_HINTS = ("error", "err_msg", "errMsg", "resultCode", "OPP", "신청", "권한")
+
+
+def _looks_like_error_payload(payload: dict[str, Any]) -> bool:
+    """레코드 배열이 없고 에러성 키만 있으면 에러 응답으로 간주."""
+    if any(isinstance(v, list) for v in payload.values()):
+        return False
+    keys = " ".join(payload.keys())
+    return any(h.lower() in keys.lower() for h in _ERROR_HINTS)
 
 
 @dataclass(frozen=True)
@@ -142,7 +153,16 @@ class KrxOpenApiClient:
             raise ProviderError(f"{endpoint.name} 호출 실패: {exc}") from exc
 
         if resp.status_code == 404:
-            raise ProviderError(f"{endpoint.name}: 존재하지 않는 엔드포인트 (404)")
+            raise NotSubscribed(
+                f"{endpoint.name}: 404. 엔드포인트가 없거나, 해당 서비스에 대한 "
+                f"'API 이용신청'을 하지 않았을 수 있습니다."
+            )
+        if resp.status_code in (401, 403):
+            raise NotSubscribed(
+                f"{endpoint.name}: HTTP {resp.status_code} (권한 없음). "
+                f"openapi.krx.co.kr > 서비스 이용 에서 이 API 의 '이용신청'을 "
+                f"완료했는지 확인하십시오 -- 인증키 발급과 서비스별 이용신청은 별개입니다."
+            )
         if resp.status_code != 200:
             raise ProviderError(
                 f"{endpoint.name}: HTTP {resp.status_code} -- {resp.text[:200]}"
@@ -152,6 +172,13 @@ class KrxOpenApiClient:
             payload = resp.json()
         except ValueError as exc:
             raise ProviderError(f"{endpoint.name}: JSON 파싱 실패 -- {resp.text[:200]}") from exc
+
+        # KRX 는 미신청 서비스에 대해 200 + 에러 본문을 주기도 합니다. 이것을
+        # '데이터 없음' 으로 오해하면 Phase 0 판정이 통째로 틀어집니다.
+        if _looks_like_error_payload(payload):
+            raise NotSubscribed(
+                f"{endpoint.name}: 200 이지만 에러 응답 -- {str(payload)[:200]}"
+            )
 
         if use_cache:
             self.cache.set(ns, params, payload)
