@@ -51,6 +51,56 @@ class IngestResult:
     warnings: list[str]
 
 
+# 유니버스 상한. KRX 전 종목(2,700+)을 다 담으면 수집·예측이 느려지고, 무엇보다
+# 횡단면 모형이 거래가 거의 없는 소형주 노이즈에 지배됩니다.
+DEFAULT_UNIVERSE_LIMIT = 300
+
+UNIVERSE_LIMIT_CAVEAT = (
+    "유니버스를 **현재** 시가총액 상위 종목으로 제한했습니다. 과거 구간에도 이 "
+    "목록을 적용하므로, 그동안 순위 밖으로 밀려났거나 상장폐지된 종목이 빠져 "
+    "백테스트·예측 성과가 낙관적으로 편향됩니다(생존편향). 화면의 수치를 볼 때 "
+    "이 점을 감안하십시오."
+)
+
+
+def limit_to_top_market_cap(
+    panel: pd.DataFrame, limit: int = DEFAULT_UNIVERSE_LIMIT
+) -> tuple[pd.DataFrame, int]:
+    """가장 최근 일자의 시가총액 기준 상위 `limit` 종목만 남깁니다.
+
+    왜 필요한가:
+        KRX 전 종목은 2,700개가 넘습니다. 전부 담으면 수집이 느려질 뿐 아니라,
+        횡단면 예측 모형이 하루 거래가 몇 백만원인 종목들의 노이즈에 지배되어
+        분석 품질이 떨어집니다.
+
+    정직한 한계 (호출자는 UNIVERSE_LIMIT_CAVEAT 를 함께 노출할 것):
+        선정 기준이 **현재** 시가총액이므로, 과거 구간에 대해서는 미래 정보를
+        쓴 셈입니다. 지금 대형주인 종목만 남으니 '그동안 살아남아 커진 기업'에
+        표본이 쏠립니다. 엄밀히 하려면 시점별 상위 종목 목록이 필요하며, 그건
+        무료 데이터로는 구하기 어렵습니다.
+
+    Returns:
+        (필터된 패널, 남은 종목 수)
+    """
+    if panel.empty or "market_cap" not in panel.columns:
+        return panel, int(panel["ticker"].nunique()) if not panel.empty else 0
+
+    latest = panel["date"].max()
+    snapshot = panel[panel["date"] == latest].dropna(subset=["market_cap"])
+    if snapshot.empty:
+        # 시총 정보가 없으면 거래대금으로 대체합니다. 임의로 잘라내는 것보다
+        # 규모 대용치를 쓰는 편이 낫습니다.
+        snapshot = panel[panel["date"] == latest].dropna(subset=["value"])
+        if snapshot.empty:
+            return panel, int(panel["ticker"].nunique())
+        keep = set(snapshot.nlargest(limit, "value")["ticker"])
+    else:
+        keep = set(snapshot.nlargest(limit, "market_cap")["ticker"])
+
+    filtered = panel[panel["ticker"].isin(keep)]
+    return filtered, len(keep)
+
+
 def ingest_us_prices(
     tickers: list[str] | None = None,
     *,
@@ -192,8 +242,13 @@ def ingest_kr_prices(
     *,
     days: int = 30,
     store: Store | None = None,
+    limit: int = DEFAULT_UNIVERSE_LIMIT,
 ) -> IngestResult:
-    """한국 시세 수집 (KRX Open API, **인증키 필요**)."""
+    """한국 시세 수집 (KRX Open API, **인증키 필요**).
+
+    KRX 는 전 종목(2,700+)을 한 번에 주므로, 저장 **전에** 시총 상위 `limit`
+    종목으로 줄입니다. 저장 후 걸러내면 DB 가 이미 비대해진 뒤라 의미가 없습니다.
+    """
     from app.providers.krx_openapi import KrxOpenApiPriceProvider
 
     store = store or get_store()
@@ -219,6 +274,14 @@ def ingest_kr_prices(
                             warnings or ["수집된 데이터가 없습니다."])
 
     all_df = pd.concat(frames, ignore_index=True)
+
+    total_tickers = int(all_df["ticker"].nunique())
+    all_df, kept = limit_to_top_market_cap(all_df, limit)
+    if kept < total_tickers:
+        warnings.append(
+            f"전체 {total_tickers:,}종목 중 시총 상위 {kept}종목만 유지했습니다. "
+            + UNIVERSE_LIMIT_CAVEAT
+        )
 
     # 세부업종(반도체·은행 등) 결합. KRX 업종명은 이미 한글입니다.
     # 실패해도 시세 수집을 막지 않습니다 -- 업종은 보조 정보입니다.

@@ -1,5 +1,6 @@
 "use client";
 
+import { StockSearch } from "@/components/StockSearch";
 import { api, type StockDetail, type UniverseItem } from "@/lib/api";
 import { industryLabel, sectorLabel } from "@/lib/sectorNames";
 import { useCallback, useEffect, useState } from "react";
@@ -83,24 +84,18 @@ export default function StocksPage() {
             <option value="US">미국</option>
             <option value="KR">한국</option>
           </select>
-          <select
-            value={ticker ?? ""}
-            onChange={(e) => setTicker(e.target.value)}
-            disabled={!universe.length}
-          >
-            {universe.map((u) => (
-              <option key={u.ticker} value={u.ticker}>
-                {u.ticker}
-                {u.name ? ` — ${u.name}` : ""}
-                {u.industry
-                  ? ` · ${industryLabel(u.industry)}`
-                  : u.sector
-                    ? ` · ${sectorLabel(u.sector)}`
-                    : ""}
-              </option>
-            ))}
-          </select>
+          <StockSearch
+            market={market}
+            selected={ticker}
+            onSelect={setTicker}
+          />
         </div>
+        {universe.length > 0 && (
+          <div className="caveat">
+            수집된 {universe.length.toLocaleString()}종목 중에서 검색합니다.
+            코드·이름·업종 중 무엇이든 일부만 입력하면 됩니다.
+          </div>
+        )}
       </div>
 
       {error && (

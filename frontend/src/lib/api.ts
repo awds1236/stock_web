@@ -83,6 +83,15 @@ export type WatchCandidate = {
   reasons: string[];
 };
 
+export type SearchHit = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  market_cap: number | null;
+  match: "ticker" | "name" | "industry";
+};
+
 export type Watchlist = {
   market: string;
   as_of: string;
@@ -250,6 +259,12 @@ export const api = {
     IS_STATIC
       ? staticFile<Watchlist>(`watchlist-${market}.json`)
       : req<Watchlist>(`/api/watchlist/${market}`),
+  search: async (market: string, q: string, limit = 20) =>
+    IS_STATIC
+      ? searchLocally(await api.universe(market), q, limit)
+      : req<SearchHit[]>(
+          `/api/search/${market}?q=${encodeURIComponent(q)}&limit=${limit}`,
+        ),
   buildInfo: () =>
     staticFile<{ generated_at: string; note: string }>("build-info.json"),
   credentials: () =>
@@ -284,6 +299,56 @@ export const api = {
           warnings: string[];
         }>(`/api/ingest/${market}?years=${years}`, { method: "POST" }),
 };
+
+/**
+ * 정적 배포용 클라이언트 검색.
+ *
+ * Pages 에는 백엔드가 없으므로 universe 스냅샷을 받아 브라우저에서 거릅니다.
+ * **백엔드와 같은 순위 규칙**을 씁니다 -- 규칙이 갈리면 로컬과 배포에서 검색
+ * 결과가 달라지고, 그건 추적하기 어려운 종류의 버그입니다.
+ *
+ * 시총 정렬은 스냅샷에 시총이 없어 불가능하므로, 동점 시 종목코드 순입니다.
+ */
+function searchLocally(
+  universe: UniverseItem[],
+  q: string,
+  limit: number,
+): SearchHit[] {
+  const toHit = (u: UniverseItem, match: SearchHit["match"]): SearchHit => ({
+    ticker: u.ticker,
+    name: u.name,
+    sector: u.sector,
+    industry: u.industry,
+    market_cap: null,
+    match,
+  });
+
+  const needle = q.trim().toLowerCase();
+  if (!needle) return universe.slice(0, limit).map((u) => toHit(u, "ticker"));
+
+  const scored: { rank: number; hit: SearchHit }[] = [];
+  for (const u of universe) {
+    const ticker = u.ticker.toLowerCase();
+    const name = (u.name ?? "").toLowerCase();
+    const industry = (u.industry ?? "").toLowerCase();
+    const sector = (u.sector ?? "").toLowerCase();
+
+    if (ticker === needle) scored.push({ rank: 0, hit: toHit(u, "ticker") });
+    else if (ticker.startsWith(needle))
+      scored.push({ rank: 1, hit: toHit(u, "ticker") });
+    else if (name.startsWith(needle))
+      scored.push({ rank: 2, hit: toHit(u, "name") });
+    else if (name.includes(needle))
+      scored.push({ rank: 3, hit: toHit(u, "name") });
+    else if (industry.includes(needle) || sector.includes(needle))
+      scored.push({ rank: 4, hit: toHit(u, "industry") });
+  }
+
+  scored.sort(
+    (a, b) => a.rank - b.rank || a.hit.ticker.localeCompare(b.hit.ticker),
+  );
+  return scored.slice(0, limit).map((s) => s.hit);
+}
 
 export const pct = (v: number | null | undefined, digits = 2) =>
   v === null || v === undefined || !isFinite(v)

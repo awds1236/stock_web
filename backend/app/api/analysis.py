@@ -183,6 +183,103 @@ def universe(market: str) -> list[UniverseItem]:
     ]
 
 
+# ── 검색 (자동완성) ───────────────────────────────────────────────────────
+class SearchHit(BaseModel):
+    ticker: str
+    name: str | None
+    sector: str | None
+    industry: str | None
+    market_cap: float | None
+    match: str  # ticker | name | industry -- 어디에 걸렸는지 (UI 강조용)
+
+
+@router.get("/search/{market}", response_model=list[SearchHit])
+def search(
+    market: str,
+    q: str = Query("", description="종목코드·종목명·업종 일부"),
+    limit: int = Query(20, ge=1, le=50),
+):
+    """종목 검색 (자동완성용).
+
+    전부 입력하지 않아도 되도록 **부분 일치**로 찾고, 관련도 순으로 정렬합니다:
+
+        1. 종목코드 완전 일치      (005930 → 삼성전자)
+        2. 종목코드 시작 일치      (0059 → 005930)
+        3. 종목명 시작 일치        (삼성 → 삼성전자, 삼성물산)
+        4. 종목명 부분 일치        (전자 → 삼성전자, LG전자)
+        5. 업종 일치              (반도체 → 해당 업종 종목들)
+
+    동점이면 시가총액 순입니다 -- 사용자가 찾는 건 대개 큰 종목이기 때문입니다.
+    빈 질의는 시총 상위를 반환해 검색창을 열자마자 무언가 보이게 합니다.
+    """
+    _require_market(market)
+    market = market.upper()
+    store = get_store()
+    df = store.universe(market)
+    if df.empty:
+        return []
+
+    # 시총은 유니버스 뷰에 없으므로 최신 스냅샷에서 가져옵니다.
+    caps = _latest_market_caps(market)
+    df["market_cap"] = df["ticker"].map(caps)
+
+    needle = q.strip().lower()
+    if not needle:
+        top = df.nlargest(limit, "market_cap", keep="all").head(limit)
+        return [_hit(r, "ticker") for _, r in top.iterrows()]
+
+    scored: list[tuple[int, float, pd.Series, str]] = []
+    for _, r in df.iterrows():
+        ticker = str(r["ticker"]).lower()
+        name = str(r["name"]).lower() if pd.notna(r["name"]) else ""
+        industry = str(r["industry"]).lower() if pd.notna(r.get("industry")) else ""
+        sector = str(r["sector"]).lower() if pd.notna(r["sector"]) else ""
+
+        if ticker == needle:
+            rank, where = 0, "ticker"
+        elif ticker.startswith(needle):
+            rank, where = 1, "ticker"
+        elif name.startswith(needle):
+            rank, where = 2, "name"
+        elif needle in name:
+            rank, where = 3, "name"
+        elif needle in industry or needle in sector:
+            rank, where = 4, "industry"
+        else:
+            continue
+
+        cap = r["market_cap"]
+        scored.append((rank, -(cap if pd.notna(cap) else 0.0), r, where))
+
+    scored.sort(key=lambda x: (x[0], x[1]))
+    return [_hit(r, where) for _, _, r, where in scored[:limit]]
+
+
+def _hit(row: pd.Series, where: str) -> SearchHit:
+    return SearchHit(
+        ticker=row["ticker"],
+        name=row["name"] if pd.notna(row["name"]) else None,
+        sector=row["sector"] if pd.notna(row["sector"]) else None,
+        industry=row["industry"] if pd.notna(row.get("industry")) else None,
+        market_cap=_f(row.get("market_cap")),
+        match=where,
+    )
+
+
+def _latest_market_caps(market: str) -> dict[str, float]:
+    """최신 일자의 종목별 시가총액. 검색 결과 정렬에 씁니다."""
+    with get_store().cursor() as con:
+        df = con.execute(
+            """
+            SELECT ticker, market_cap FROM prices
+            WHERE market = ? AND market_cap IS NOT NULL
+              AND date = (SELECT max(date) FROM prices WHERE market = ?)
+            """,
+            [market, market],
+        ).fetchdf()
+    return dict(zip(df["ticker"], df["market_cap"], strict=False)) if not df.empty else {}
+
+
 # ── 종목 상세 ─────────────────────────────────────────────────────────────
 @router.get("/stocks/{market}/{ticker}", response_model=StockDetailOut)
 def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000)):
@@ -802,7 +899,11 @@ class IngestOut(BaseModel):
 
 
 @router.post("/ingest/{market}", response_model=IngestOut)
-def ingest(market: str, years: int = Query(10, ge=1, le=25)):
+def ingest(
+    market: str,
+    years: int = Query(10, ge=1, le=25),
+    limit: int = Query(300, ge=20, le=2000, description="시총 상위 N종목만 저장"),
+):
     """데이터 수집 실행.
 
     미국은 인증키 없이 즉시 동작합니다. 한국은 KRX 인증키가 필요하며, 없으면
@@ -815,7 +916,11 @@ def ingest(market: str, years: int = Query(10, ge=1, le=25)):
     from app.providers.base import ProviderError
 
     try:
-        res = ingest_us_prices(years=years) if market == "US" else ingest_kr_prices()
+        res = (
+            ingest_us_prices(years=years)
+            if market == "US"
+            else ingest_kr_prices(limit=limit)
+        )
     except ProviderError as exc:
         raise HTTPException(409, str(exc)) from exc
 
