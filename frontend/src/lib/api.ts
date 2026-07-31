@@ -155,6 +155,214 @@ export type Credential = {
   editable: boolean;
 };
 
+/**
+ * 대상 단위 분석 리포트.
+ *
+ * `report` 의 내부는 백엔드 `app/reports.py` 가 만드는 dict 그대로입니다.
+ * 필드를 하나하나 복제한 타입을 두지 않는 이유: 백엔드가 지표를 하나 추가할
+ * 때마다 두 곳을 고쳐야 하고, 안 고치면 값이 있는데 화면에 없는 상태가
+ * 됩니다. 화면이 실제로 읽는 부분만 좁게 선언합니다.
+ */
+export type RuleBlock = {
+  matched: string[];
+  score: number;
+  all: string[];
+  caveat: string;
+};
+
+export type StockReport = {
+  market: string;
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  as_of: string;
+  price: {
+    close: number | null;
+    prev_close: number | null;
+    change_1d: number | null;
+    high_52w: number | null;
+    low_52w: number | null;
+  };
+  returns: Record<string, number | null>;
+  indicators: Record<string, number | null>;
+  trend: {
+    stack: string;
+    cross_20_60: CrossState;
+    cross_50_200: CrossState;
+  };
+  liquidity: {
+    value_5d: number | null;
+    value_60d: number | null;
+    surge_ratio: number | null;
+  };
+  levels: Level[];
+  interpretation: Interpretation[];
+  rules: RuleBlock;
+  relative: {
+    sector: string | null;
+    sector_ret_20d: number | null;
+    stock_ret_20d: number | null;
+    excess_vs_sector_20d: number | null;
+    universe_ret_20d: number | null;
+    excess_vs_universe_20d: number | null;
+    rank_60d: { rank: number; of: number } | null;
+  };
+  data_quality: {
+    n_days: number;
+    first_date: string;
+    last_date: string;
+    n_universe: number;
+  };
+  caveats: string[];
+};
+
+export type CrossState = {
+  state: "golden" | "dead" | "insufficient";
+  last_cross: "golden" | "dead" | null;
+  days_since_cross: number | null;
+};
+
+export type StockAnalysis = {
+  report: StockReport;
+  forecast: Forecast | null;
+  forecast_error: string | null;
+};
+
+export type TickerLine = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  close: number | null;
+  ret_5d?: number | null;
+  ret_20d: number | null;
+  ret_60d?: number | null;
+};
+
+export type SectorReport = {
+  market: string;
+  level: string;
+  sector: string;
+  as_of: string;
+  ret_20d: number | null;
+  ret_60d: number | null;
+  relative_strength_60d: number | null;
+  breadth: number | null;
+  n_constituents: number;
+  rank_by_ret_20d: number | null;
+  n_sectors: number;
+  leaders: TickerLine[];
+  laggards: TickerLine[];
+  market_ret_20d: number | null;
+  peer_sectors: SectorRow[];
+  caveats: string[];
+};
+
+export type AttentionItem = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  close: number | null;
+  ret_20d: number | null;
+  pct_from_52w_high: number | null;
+  score: number;
+  reasons: string[];
+};
+
+export type MarketReport = {
+  market: string;
+  as_of: string;
+  universe: { n_tickers: number; note: string };
+  index_proxy: Record<string, number | null>;
+  internals: {
+    above_sma60_pct: number | null;
+    near_52w_high_pct: number | null;
+    median_vol_20d: number | null;
+    n_evaluated: number;
+  };
+  sectors_top: SectorRow[];
+  sectors_bottom: SectorRow[];
+  level: string;
+  movers_up: TickerLine[];
+  movers_down: TickerLine[];
+  attention: AttentionItem[];
+  rules: string[];
+  caveats: string[];
+};
+
+export type Quote = {
+  market: string;
+  ticker: string;
+  price: number | null;
+  previous_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  currency: string | null;
+  source: "live" | "stored";
+  as_of: string | null;
+  note: string;
+};
+
+export type AILog = {
+  id: string;
+  created_at: string;
+  kind: "stock" | "sector" | "market";
+  market: string;
+  subject: string;
+  subject_label: string | null;
+  model: string | null;
+  content: string | null;
+  facts: Record<string, unknown> | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  duration_ms: number | null;
+  error: string | null;
+};
+
+export type AIStatus = {
+  configured: boolean;
+  model: string;
+  base_url: string;
+  n_logs: number;
+  message: string;
+  disclaimer: string;
+};
+
+export type Preferences = {
+  ai_model: string;
+  ai_base_url: string;
+  ai_max_output_tokens: number;
+  ai_timeout_seconds: number;
+  auto_refresh_enabled: boolean;
+  auto_refresh_interval_minutes: number;
+  auto_refresh_markets: string[];
+  auto_refresh_lookback_days: number;
+};
+
+export type RefreshResult = {
+  market: string;
+  at: string;
+  ok: boolean;
+  rows: number;
+  tickers: number;
+  detail: string;
+};
+
+export type RefreshStatus = {
+  enabled: boolean;
+  interval_minutes: number;
+  markets: string[];
+  lookback_days: number;
+  running: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  next_run_at: string | null;
+  results: RefreshResult[];
+  note: string;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -298,7 +506,113 @@ export const api = {
           end: string | null;
           warnings: string[];
         }>(`/api/ingest/${market}?years=${years}`, { method: "POST" }),
+
+  // ── 대상 단위 분석 (버튼으로 실행) ──────────────────────────────────
+  // 정적 배포에서도 동작합니다. CI 가 같은 엔드포인트의 응답을 파일로
+  // 고정해두기 때문입니다 -- 두 배포에서 다른 앱이 되지 않게 하는 것이
+  // 이 프로젝트의 규칙입니다. 다만 정적 스냅샷에는 예측이 포함되지 않습니다.
+  analyzeStock: (market: string, ticker: string, includeForecast = false) =>
+    IS_STATIC
+      ? staticFile<StockAnalysis>(`analysis-stock-${market}-${ticker}.json`)
+      : req<StockAnalysis>(
+          `/api/analyze/stock/${market}/${ticker}?include_forecast=${includeForecast}`,
+        ),
+  analyzeSector: (market: string, sector: string, level = "industry") =>
+    IS_STATIC
+      ? staticFile<{ report: SectorReport }>(
+          `analysis-sector-${market}-${sectorSlug(sector)}.json`,
+        )
+      : req<{ report: SectorReport }>(
+          `/api/analyze/sector/${market}?sector=${encodeURIComponent(sector)}` +
+            `&level=${level}`,
+        ),
+  analyzeMarket: (market: string) =>
+    IS_STATIC
+      ? staticFile<{ report: MarketReport }>(`analysis-market-${market}.json`)
+      : req<{ report: MarketReport }>(`/api/analyze/market/${market}`),
+
+  // 현재가. 정적 배포에는 백엔드가 없으므로 값을 만들 수 없습니다 --
+  // 마지막 스냅샷 종가를 현재가인 것처럼 보여주는 편이 더 나쁩니다.
+  quote: (market: string, ticker: string) =>
+    IS_STATIC
+      ? Promise.reject(new ApiError(STATIC_WRITE_MSG, 501))
+      : req<Quote>(`/api/quote/${market}/${ticker}`),
+
+  // ── AI 분석 ─────────────────────────────────────────────────────────
+  aiStatus: () =>
+    IS_STATIC ? staticWriteBlocked() : req<AIStatus>("/api/ai/status"),
+  aiAnalyzeStock: (market: string, ticker: string) =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<AILog>(`/api/ai/analyze/stock/${market}/${ticker}`, {
+          method: "POST",
+        }),
+  aiAnalyzeSector: (market: string, sector: string, level = "industry") =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<AILog>(
+          `/api/ai/analyze/sector/${market}?sector=${encodeURIComponent(sector)}` +
+            `&level=${level}`,
+          { method: "POST" },
+        ),
+  aiAnalyzeMarket: (market: string) =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<AILog>(`/api/ai/analyze/market/${market}`, { method: "POST" }),
+  aiLogs: (params: { kind?: string; market?: string; subject?: string } = {}) => {
+    if (IS_STATIC) staticWriteBlocked();
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+    return req<AILog[]>(`/api/ai/logs?${q.toString()}`);
+  },
+  aiLog: (id: string) =>
+    IS_STATIC ? staticWriteBlocked() : req<AILog>(`/api/ai/logs/${id}`),
+  deleteAiLog: (id: string) =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<{ deleted: string }>(`/api/ai/logs/${id}`, { method: "DELETE" }),
+
+  // ── 설정·자동 갱신 ──────────────────────────────────────────────────
+  preferences: () =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<{
+          preferences: Preferences;
+          env_controlled: string[];
+          note: string;
+        }>("/api/settings/preferences"),
+  savePreferences: (patch: Partial<Preferences>) =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<{
+          preferences: Preferences;
+          env_controlled: string[];
+          note: string;
+        }>("/api/settings/preferences", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+        }),
+  refreshStatus: () =>
+    IS_STATIC ? staticWriteBlocked() : req<RefreshStatus>("/api/refresh/status"),
+  runRefresh: (market?: string) =>
+    IS_STATIC
+      ? staticWriteBlocked()
+      : req<RefreshResult[]>(
+          `/api/refresh/run${market ? `?market=${market}` : ""}`,
+          { method: "POST" },
+        ),
 };
+
+/**
+ * 업종명 → 정적 스냅샷 파일명.
+ *
+ * 백엔드 `scripts/export_static.py::_slug` 와 **같은 규칙**이어야 합니다.
+ * 갈리면 정적 배포에서만 404 가 나고 로컬에서는 재현되지 않습니다.
+ */
+export function sectorSlug(name: string): string {
+  return encodeURIComponent(name);
+}
 
 /**
  * 정적 배포용 클라이언트 검색.

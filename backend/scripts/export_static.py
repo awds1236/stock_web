@@ -28,8 +28,18 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+
+def _slug(name: str) -> str:
+    """업종명을 파일명으로. 한글·공백·슬래시가 그대로 들어가면 안 됩니다.
+
+    프론트엔드에도 **같은 규칙**이 있습니다(lib/api.ts). 두 곳이 갈리면
+    정적 배포에서만 404 가 나고, 로컬에서는 재현되지 않습니다.
+    """
+    return quote(name, safe="")
 
 FORECAST_TARGETS = ("direction", "return", "volatility")
 # 정적 배포에는 21일(1개월) 예측만 포함합니다. 타깃×기간 전 조합을 생성하면
@@ -124,14 +134,27 @@ def main() -> int:
             t = item["ticker"]
             dump(f"/api/stocks/{market}/{t}", f"stocks-{market}-{t}.json",
                  required=required)
+            # 종목별 분석도 함께 고정합니다. 정적 배포에서 "분석" 버튼이
+            # 로컬에서만 되는 기능이면, 두 배포가 서로 다른 앱이 됩니다.
+            dump(f"/api/analyze/stock/{market}/{t}",
+                 f"analysis-stock-{market}-{t}.json", required=False)
 
         dump(f"/api/sectors/{market}", f"sectors-{market}.json", required=False)
-        dump(
+        sectors = dump(
             f"/api/sectors/{market}?level=industry",
             f"sectors-{market}-industry.json",
             required=False,
         )
         dump(f"/api/watchlist/{market}", f"watchlist-{market}.json", required=False)
+        dump(f"/api/analyze/market/{market}", f"analysis-market-{market}.json",
+             required=False)
+        for row in sectors or []:
+            name = row["sector"]
+            dump(
+                f"/api/analyze/sector/{market}?sector={quote(name)}&level=industry",
+                f"analysis-sector-{market}-{_slug(name)}.json",
+                required=False,
+            )
 
         for target in FORECAST_TARGETS:
             print(f"예측 계산 중: {market}/{target} ({FORECAST_HORIZON}일)…")

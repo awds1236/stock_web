@@ -165,6 +165,32 @@ export default function MethodologyPage() {
         </div>
       </div>
 
+      <h3>AI 서술 분석은 예측 엔진이 아닙니다</h3>
+      <div className="card">
+        <div>
+          확률과 품질 지표는 전적으로 예측 엔진이 만듭니다. AI 는 그 결과를 포함한{" "}
+          <strong>이미 계산된 숫자를 읽고 서술할 뿐</strong>이며, 검색하지도
+          기억에 의존하지도 않습니다.
+        </div>
+        <div className="caveat" style={{ marginTop: 8 }}>
+          <strong>프롬프트에 담기는 것</strong> — 이 앱이 계산한 지표 JSON 뿐입니다.
+          실적·뉴스·공시·목표주가는 넘기지 않으며, 없는 것은 &quot;데이터에
+          없다&quot;고 쓰도록 지시합니다. 점 예측과 매수/매도 추천은 시스템
+          프롬프트에서 금지합니다.
+        </div>
+        <div className="caveat">
+          <strong>없앨 수 없는 위험</strong> — 지어내기를 막는 것과 올바르게
+          추론하게 하는 것은 다른 문제이며, 후자는 프롬프트로 보장되지 않습니다.
+          숫자의 원본은 항상 지표 화면이며, <strong>AI 문장이 그것과 어긋나면
+          지표 화면이 맞습니다.</strong>
+        </div>
+        <div className="caveat">
+          <strong>비결정성</strong> — 같은 데이터로 다시 물어도 같은 문장이 나오지
+          않습니다. 이것은 결함이 아니라 도구의 성질이며, 그래서 실행한 분석을
+          그때 넘긴 숫자와 함께 보관합니다(AI 기록 화면).
+        </div>
+      </div>
+
       <h3>근거 문헌</h3>
       <div className="card">
         <ul style={{ margin: 0, paddingLeft: 18 }}>

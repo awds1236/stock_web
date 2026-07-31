@@ -42,6 +42,46 @@ RULE_CAVEAT = (
 )
 
 
+# 패널 캐시.
+#
+# 모든 리포트가 유니버스 전체 패널을 필요로 합니다 -- 상대강도와 순위는 다른
+# 종목 없이는 계산할 수 없기 때문입니다. 종목 하나를 볼 때마다 수십만 행을
+# DuckDB 에서 다시 읽어 DataFrame 으로 만들면, "버튼 눌러 이 종목만 빠르게"가
+# 성립하지 않습니다.
+#
+# 무효화는 데이터 지문(마지막 일자 + 행 수)으로 합니다. 캐시된 프레임은
+# 읽기 전용으로만 쓰이며(모든 호출자가 필터링/copy 로 시작), 여기서 변형하지
+# 않습니다.
+_PANEL_CACHE: dict[str, tuple[tuple, pd.DataFrame]] = {}
+
+
+def load_panel(market: str, store: Store) -> pd.DataFrame:
+    stamp = store.stamp(market)
+    hit = _PANEL_CACHE.get(market)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    panel = store.prices(market)
+    _PANEL_CACHE[market] = (stamp, panel)
+    return panel
+
+
+def clear_panel_cache() -> None:
+    _PANEL_CACHE.clear()
+
+
+def _split_ends(ranked: list, k: int) -> tuple[list, list]:
+    """정렬된 목록의 양 끝을 **겹치지 않게** 잘라냅니다.
+
+    단순히 `[:k]` 와 `[-k:]` 를 쓰면 항목이 k개 이하일 때 같은 종목이 '상위'와
+    '하위' 양쪽에 나옵니다. 실제로 구성종목 2개짜리 업종에서 두 표가 똑같은
+    두 종목을 보여주는 화면이 나왔습니다 -- 사용자에게는 데이터 오류로 보입니다.
+    나눌 것이 없으면 하위는 비워두고, 화면이 그 사실을 말합니다.
+    """
+    head = ranked[:k]
+    tail = ranked[max(k, len(ranked) - k) :]
+    return head, tail[::-1]
+
+
 # ── 종목 ──────────────────────────────────────────────────────────────────
 def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dict[str, Any]:
     """종목 하나에 대한 전체 분석 묶음.
@@ -53,7 +93,7 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
     """
     store = store or get_store()
     market = market.upper()
-    panel = store.prices(market)
+    panel = load_panel(market, store)
     if panel.empty:
         raise LookupError(f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
 
@@ -225,7 +265,7 @@ def sector_report(
     """
     store = store or get_store()
     market = market.upper()
-    panel = store.prices(market)
+    panel = load_panel(market, store)
     if panel.empty:
         raise LookupError(f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
     if level not in panel.columns or panel[level].isna().all():
@@ -254,6 +294,7 @@ def sector_report(
     my_rank = next(
         (i + 1 for i, s in enumerate(all_sectors) if s["sector"] == sector), None
     )
+    leaders, laggards = _split_ends(ranked, 5)
 
     return {
         "market": market,
@@ -267,8 +308,8 @@ def sector_report(
         "n_constituents": int(members["ticker"].nunique()),
         "rank_by_ret_20d": my_rank,
         "n_sectors": len(all_sectors),
-        "leaders": ranked[:5],
-        "laggards": ranked[-5:][::-1],
+        "leaders": leaders,
+        "laggards": laggards,
         "market_ret_20d": _mean(universe_returns(panel, window=20)),
         "peer_sectors": all_sectors[:8],
         "caveats": [
@@ -309,7 +350,7 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
     """
     store = store or get_store()
     market = market.upper()
-    panel = store.prices(market)
+    panel = load_panel(market, store)
     if panel.empty:
         raise LookupError(f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
 
@@ -334,6 +375,8 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
 
     stats = _market_internals(panel)
     attention = _attention_list(panel, per_ticker)
+    sectors_top, sectors_bottom = _split_ends(sectors, 5)
+    movers_up, movers_down = _split_ends(ranked_20, 8)
 
     return {
         "market": market,
@@ -350,11 +393,11 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
             "ret_120d": _mean(universe_returns(panel, window=120)),
         },
         "internals": stats,
-        "sectors_top": sectors[:5],
-        "sectors_bottom": sectors[-5:][::-1] if len(sectors) > 5 else [],
+        "sectors_top": sectors_top,
+        "sectors_bottom": sectors_bottom,
         "level": level,
-        "movers_up": ranked_20[:8],
-        "movers_down": ranked_20[-8:][::-1],
+        "movers_up": movers_up,
+        "movers_down": movers_down,
         "attention": attention,
         "rules": WATCH_RULES,
         "caveats": [

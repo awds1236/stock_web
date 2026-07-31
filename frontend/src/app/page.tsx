@@ -171,10 +171,16 @@ export default function Home() {
         <>
           <h3>다음 단계</h3>
           <div className="grid grid-2">
+            <Link href="/market" className="card">
+              <strong>시장 분석</strong>
+              <div className="muted">
+                시장 전체 상태와 규칙에 걸린 주목 종목
+              </div>
+            </Link>
             <Link href="/stocks" className="card">
               <strong>종목 분석</strong>
               <div className="muted">
-                가격 차트와 지표, 그리고 각 지표의 해석과 한계
+                종목을 고르면 차트·지표는 자동, 상대분석은 버튼으로
               </div>
             </Link>
             <Link href="/sectors" className="card">
@@ -187,6 +193,12 @@ export default function Home() {
               <strong>예측</strong>
               <div className="muted">
                 보정된 확률과 그 확률의 신뢰도 곡선
+              </div>
+            </Link>
+            <Link href="/ai-logs" className="card">
+              <strong>AI 분석 기록</strong>
+              <div className="muted">
+                실행한 AI 서술과 그때 넘긴 숫자를 함께 보관
               </div>
             </Link>
             <Link href="/methodology" className="card">

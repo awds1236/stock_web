@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from app.credentials import MANAGED, CredentialError, store
 from app.prefs import Preferences, get_prefs_store
@@ -145,6 +145,17 @@ def update_preferences(patch: PreferencesPatch) -> PreferencesOut:
     prefs_store = get_prefs_store()
     try:
         prefs = prefs_store.save(patch.model_dump(exclude_none=True))
+    except ValidationError as exc:
+        # pydantic 의 원문(타입 코드·문서 링크)을 그대로 흘리면 사용자는 무엇을
+        # 잘못 입력했는지 찾기 어렵습니다. 필드명과 사유만 남깁니다.
+        raise HTTPException(
+            status_code=400,
+            detail="; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: "
+                f"{e['msg'].removeprefix('Value error, ')}"
+                for e in exc.errors()
+            ),
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PreferencesOut(

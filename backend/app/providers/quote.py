@@ -54,11 +54,27 @@ def fetch_us_quote(ticker: str) -> LiveQuote:
         prev = _pick(info, "previous_close", "previousClose")
         currency = _pick(info, "currency", default=None, numeric=False)
     except Exception as exc:  # noqa: BLE001 -- 비공식 스크래핑이라 실패 형태가 다양합니다
-        return LiveQuote(None, None, None, "unavailable", f"현재가 조회 실패: {exc}")
+        # 원본 예외를 함께 남기되, 그것만으로는 사용자가 무엇을 해야 할지
+        # 알 수 없으므로 원인 후보를 같이 적습니다. yfinance 는 비공식
+        # 스크래핑이라 차단·규격변경·네트워크 어느 쪽이든 같은 모양으로
+        # 터집니다.
+        return LiveQuote(None, None, None, "unavailable", _failure_note(exc))
 
     if price is None:
-        return LiveQuote(None, None, None, "unavailable", "응답에 가격이 없습니다.")
+        return LiveQuote(
+            None, None, None, "unavailable",
+            "시세 소스가 이 종목의 현재가를 주지 않았습니다 (상장폐지·거래정지 "
+            "또는 종목코드 불일치일 수 있습니다).",
+        )
     return LiveQuote(price, prev, currency, "live", DELAY_NOTE)
+
+
+def _failure_note(exc: Exception) -> str:
+    return (
+        "현재가 소스(yfinance)에 접근하지 못했습니다. 네트워크 차단, 요청 한도, "
+        "또는 비공식 API 규격 변경일 수 있습니다. 차트와 지표는 저장된 데이터로 "
+        f"정상 동작합니다. (원인: {type(exc).__name__}: {exc})"
+    )
 
 
 def _pick(info, *keys: str, default=None, numeric: bool = True):
