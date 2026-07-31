@@ -1,17 +1,19 @@
 "use client";
 
 import { api, pct, type SectorRow } from "@/lib/api";
-import { sectorLabel } from "@/lib/sectorNames";
+import { groupLabel } from "@/lib/sectorNames";
 import { useEffect, useState } from "react";
 
 export default function SectorsPage() {
   const [market, setMarket] = useState("US");
+  const [level, setLevel] = useState<"sector" | "industry">("industry");
   const [rows, setRows] = useState<SectorRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    setRows([]);
     api
-      .sectors(market)
+      .sectors(market, level)
       .then((r) => {
         setRows(r);
         setError(null);
@@ -20,7 +22,7 @@ export default function SectorsPage() {
         setRows([]);
         setError(e instanceof Error ? e.message : String(e));
       });
-  }, [market]);
+  }, [market, level]);
 
   return (
     <>
@@ -33,10 +35,23 @@ export default function SectorsPage() {
       </p>
 
       <div className="card">
-        <select value={market} onChange={(e) => setMarket(e.target.value)}>
-          <option value="US">미국</option>
-          <option value="KR">한국</option>
-        </select>
+        <div className="row">
+          <select value={market} onChange={(e) => setMarket(e.target.value)}>
+            <option value="US">미국</option>
+            <option value="KR">한국</option>
+          </select>
+          <select
+            value={level}
+            onChange={(e) => setLevel(e.target.value as "sector" | "industry")}
+          >
+            <option value="industry">세부업종 (반도체·은행 등)</option>
+            <option value="sector">대분류 (11개 섹터)</option>
+          </select>
+        </div>
+        <div className="caveat">
+          대분류만 보면 반도체와 소프트웨어가 모두 &ldquo;기술&rdquo;로 뭉개집니다.
+          기본값을 세부업종으로 둔 이유입니다.
+        </div>
       </div>
 
       {error && (
@@ -52,7 +67,7 @@ export default function SectorsPage() {
             <table>
               <thead>
                 <tr>
-                  <th>섹터</th>
+                  <th>{level === "industry" ? "세부업종" : "섹터"}</th>
                   <th className="num">20일 수익률</th>
                   <th className="num">60일 수익률</th>
                   <th className="num">상대강도(60일)</th>
@@ -63,7 +78,7 @@ export default function SectorsPage() {
               <tbody>
                 {rows.map((r) => (
                   <tr key={r.sector}>
-                    <td>{sectorLabel(r.sector)}</td>
+                    <td>{groupLabel(r.sector, level)}</td>
                     <td className={`num ${cls(r.ret_20d)}`}>{pct(r.ret_20d)}</td>
                     <td className={`num ${cls(r.ret_60d)}`}>{pct(r.ret_60d)}</td>
                     <td className={`num ${cls(r.relative_strength_60d)}`}>

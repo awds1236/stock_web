@@ -21,6 +21,7 @@ export type UniverseItem = {
   ticker: string;
   name: string | null;
   sector: string | null;
+  industry: string | null;
   first_date: string;
   last_date: string;
   n_days: number;
@@ -43,14 +44,52 @@ export type Interpretation = {
   caveat: string;
 };
 
+export type Level = {
+  price: number;
+  kind: "support" | "resistance";
+  touches: number;
+  distance_pct: number;
+};
+
 export type StockDetail = {
   market: string;
   ticker: string;
   name: string | null;
   sector: string | null;
+  industry: string | null;
   prices: PricePoint[];
   indicators: { date: string[]; values: Record<string, (number | null)[]> };
   interpretation: Interpretation[];
+  levels: Level[];
+};
+
+export type WatchSector = {
+  sector: string;
+  ret_20d: number | null;
+  relative_strength_60d: number | null;
+  breadth: number | null;
+  n_constituents: number;
+};
+
+export type WatchCandidate = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  close: number | null;
+  ret_20d: number | null;
+  pct_from_52w_high: number | null;
+  score: number;
+  reasons: string[];
+};
+
+export type Watchlist = {
+  market: string;
+  as_of: string;
+  rising_sectors: WatchSector[];
+  candidates: WatchCandidate[];
+  rules: string[];
+  caveat: string;
 };
 
 export type ForecastQuality = {
@@ -199,10 +238,18 @@ export const api = {
       `forecast-${market}-${target}-${STATIC_HORIZON}.json`,
     );
   },
-  sectors: (market: string) =>
+  sectors: (market: string, level: "sector" | "industry" = "sector") =>
     IS_STATIC
-      ? staticFile<SectorRow[]>(`sectors-${market}.json`)
-      : req<SectorRow[]>(`/api/sectors/${market}`),
+      ? staticFile<SectorRow[]>(
+          level === "industry"
+            ? `sectors-${market}-industry.json`
+            : `sectors-${market}.json`,
+        )
+      : req<SectorRow[]>(`/api/sectors/${market}?level=${level}`),
+  watchlist: (market: string) =>
+    IS_STATIC
+      ? staticFile<Watchlist>(`watchlist-${market}.json`)
+      : req<Watchlist>(`/api/watchlist/${market}`),
   buildInfo: () =>
     staticFile<{ generated_at: string; note: string }>("build-info.json"),
   credentials: () =>

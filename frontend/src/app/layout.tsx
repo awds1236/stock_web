@@ -21,6 +21,7 @@ export default function RootLayout({
             <div className="tag">지표 해석 · 확률 예측</div>
             <nav>
               <Link href="/">개요</Link>
+              <Link href="/watchlist">관찰 목록</Link>
               <Link href="/stocks">종목</Link>
               <Link href="/sectors">섹터</Link>
               <Link href="/forecast">예측</Link>

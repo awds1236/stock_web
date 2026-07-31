@@ -1,13 +1,14 @@
 "use client";
 
 import { api, type StockDetail, type UniverseItem } from "@/lib/api";
-import { sectorLabel } from "@/lib/sectorNames";
+import { industryLabel, sectorLabel } from "@/lib/sectorNames";
 import { useCallback, useEffect, useState } from "react";
 import {
   CartesianGrid,
   Legend,
   Line,
   LineChart,
+  ReferenceLine,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -91,7 +92,11 @@ export default function StocksPage() {
               <option key={u.ticker} value={u.ticker}>
                 {u.ticker}
                 {u.name ? ` — ${u.name}` : ""}
-                {u.sector ? ` · ${sectorLabel(u.sector)}` : ""}
+                {u.industry
+                  ? ` · ${industryLabel(u.industry)}`
+                  : u.sector
+                    ? ` · ${sectorLabel(u.sector)}`
+                    : ""}
               </option>
             ))}
           </select>
@@ -109,7 +114,9 @@ export default function StocksPage() {
         <>
           <h3>
             {detail.ticker}
-            {detail.sector ? (
+            {detail.industry ? (
+              <span className="muted"> · {industryLabel(detail.industry)}</span>
+            ) : detail.sector ? (
               <span className="muted"> · {sectorLabel(detail.sector)}</span>
             ) : null}
           </h3>
@@ -132,6 +139,27 @@ export default function StocksPage() {
                 <Line dataKey="close" name="종가" stroke="var(--accent)" dot={false} strokeWidth={2} />
                 <Line dataKey="sma20" name="20일선" stroke="var(--good)" dot={false} strokeWidth={1} />
                 <Line dataKey="sma60" name="60일선" stroke="var(--warn)" dot={false} strokeWidth={1} />
+                {/* 지지/저항 참조선. 신호가 아니라 참고선이므로 점선 + 흐린 색. */}
+                {detail.levels.map((lv) => (
+                  <ReferenceLine
+                    key={`${lv.kind}-${lv.price}`}
+                    y={lv.price}
+                    stroke={
+                      lv.kind === "support" ? "var(--good)" : "var(--bad)"
+                    }
+                    strokeDasharray="5 4"
+                    strokeOpacity={0.55}
+                    label={{
+                      value: `${lv.kind === "support" ? "지지" : "저항"} ${lv.price.toLocaleString(
+                        undefined,
+                        { maximumFractionDigits: 0 },
+                      )} (${lv.touches}회)`,
+                      position: "insideTopLeft",
+                      fill: "var(--muted)",
+                      fontSize: 10,
+                    }}
+                  />
+                ))}
               </LineChart>
             </ResponsiveContainer>
           </div>

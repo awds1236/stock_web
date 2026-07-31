@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS prices (
     date        DATE     NOT NULL,
     name        VARCHAR,
     sector      VARCHAR,
+    industry    VARCHAR,
     open        DOUBLE,
     high        DOUBLE,
     low         DOUBLE,
@@ -109,6 +110,10 @@ class Store:
                 ) from exc
             raise
         conn.execute(SCHEMA)
+        # 스키마 진화: 기존 DB 파일에는 새 컬럼이 없을 수 있습니다. CREATE TABLE
+        # IF NOT EXISTS 는 기존 테이블을 바꾸지 않으므로, 여기서 명시적으로
+        # 추가합니다. 이걸 빼먹으면 업그레이드한 사용자만 INSERT 가 깨집니다.
+        conn.execute("ALTER TABLE prices ADD COLUMN IF NOT EXISTS industry VARCHAR")
         self._conn = conn
         return conn
 
@@ -231,6 +236,7 @@ class Store:
                 SELECT ticker,
                        any_value(name)   AS name,
                        any_value(sector) AS sector,
+                       any_value(industry) AS industry,
                        min(date)         AS first_date,
                        max(date)         AS last_date,
                        count(*)          AS n_days
@@ -256,7 +262,7 @@ class Store:
 
 
 PRICE_COLUMNS = [
-    "market", "ticker", "date", "name", "sector", "open", "high", "low",
+    "market", "ticker", "date", "name", "sector", "industry", "open", "high", "low",
     "close", "volume", "value", "market_cap", "shares", "is_delisted",
 ]
 FLOW_COLUMNS = [

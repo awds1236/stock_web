@@ -80,10 +80,10 @@ def ingest_us_prices(
         return IngestResult("US", "prices", 0, 0, None, None,
                             [*warnings, "수집된 데이터가 없습니다."])
 
-    sectors = _fetch_us_sectors(tickers)
-    df["sector"] = df["ticker"].map(sectors)
-    missing_sector = int(df["sector"].isna().any())
-    if missing_sector:
+    classification = _fetch_us_classification(tickers)
+    df["sector"] = df["ticker"].map({t: c[0] for t, c in classification.items()})
+    df["industry"] = df["ticker"].map({t: c[1] for t, c in classification.items()})
+    if df["sector"].isna().any():
         warnings.append(
             "일부 종목의 섹터 정보를 가져오지 못했습니다. 해당 종목은 섹터 "
             "분석에서 제외됩니다."
@@ -105,8 +105,11 @@ def ingest_us_prices(
     )
 
 
-def _fetch_us_sectors(tickers: list[str]) -> dict[str, str]:
-    """yfinance 에서 종목별 섹터를 조회.
+def _fetch_us_classification(tickers: list[str]) -> dict[str, tuple[str | None, str | None]]:
+    """yfinance 에서 종목별 (섹터, 세부업종) 조회.
+
+    섹터(11개 대분류)만으로는 '반도체'와 '소프트웨어'가 전부 Technology 로
+    뭉개지므로, 더 세밀한 industry(세부업종, 100여 개)를 함께 저장합니다.
 
     시점별 매핑이 아니라 **현재 시점 분류**입니다. 과거 구간에 현재 분류를
     적용하면 엄밀히는 미래 정보가 섞이지만, 섹터 재분류는 드물고 무료로 얻을
@@ -117,16 +120,72 @@ def _fetch_us_sectors(tickers: list[str]) -> dict[str, str]:
     except ImportError:
         return {}
 
-    out: dict[str, str] = {}
+    out: dict[str, tuple[str | None, str | None]] = {}
     for t in tickers:
         try:
             info = yf.Ticker(t).info
             sector = info.get("sector")
-            if sector:
-                out[t] = str(sector)
+            industry = info.get("industry")
+            out[t] = (
+                str(sector) if sector else None,
+                str(industry) if industry else None,
+            )
         except Exception as exc:  # noqa: BLE001 -- 개별 종목 실패로 전체를 막지 않습니다
-            log.debug("섹터 조회 실패 %s: %s", t, exc)
+            log.debug("분류 조회 실패 %s: %s", t, exc)
     return out
+
+
+# KRX 정보데이터시스템의 업종분류현황 화면이 쓰는 내부 JSON (인증키 불필요).
+# 공식 규격이 아니므로 실패는 경고로만 처리하고 시세 수집을 막지 않습니다.
+_KRX_INDUSTRY_BLD = "dbms/MDC/STAT/standard/MDCSTAT03901"
+
+
+def fetch_kr_classification(trade_date: date) -> pd.DataFrame:
+    """KRX 업종분류현황: 종목별 한국 세부업종명 (예: '반도체', '은행').
+
+    Returns:
+        columns = [ticker, industry] -- KRX 업종명은 이미 한글이므로 번역이
+        필요 없습니다. 실패 시 빈 프레임.
+    """
+    import httpx
+
+    from app.providers.krx_mdc import _HEADERS
+
+    rows: list[dict] = []
+    with httpx.Client(timeout=30.0, headers=_HEADERS) as client:
+        for mkt in ("STK", "KSQ"):
+            resp = client.post(
+                "https://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd",
+                data={
+                    "bld": _KRX_INDUSTRY_BLD,
+                    "mktId": mkt,
+                    "trdDd": trade_date.strftime("%Y%m%d"),
+                    "money": "1",
+                    "csvxls_isNo": "false",
+                },
+            )
+            resp.raise_for_status()
+            body = resp.json()
+            for value in body.values():
+                if isinstance(value, list):
+                    rows.extend(value)
+                    break
+
+    if not rows:
+        return pd.DataFrame(columns=["ticker", "industry"])
+    raw = pd.DataFrame(rows)
+    ticker_col = "ISU_SRT_CD" if "ISU_SRT_CD" in raw.columns else "ISU_CD"
+    industry_col = next(
+        (c for c in ("IDX_IND_NM", "SECT_TP_NM", "IND_NM") if c in raw.columns), None
+    )
+    if industry_col is None or ticker_col not in raw.columns:
+        return pd.DataFrame(columns=["ticker", "industry"])
+    return pd.DataFrame(
+        {
+            "ticker": raw[ticker_col].astype(str).str.strip(),
+            "industry": raw[industry_col].astype(str).str.strip(),
+        }
+    ).drop_duplicates(subset=["ticker"])
 
 
 def ingest_kr_prices(
@@ -160,6 +219,19 @@ def ingest_kr_prices(
                             warnings or ["수집된 데이터가 없습니다."])
 
     all_df = pd.concat(frames, ignore_index=True)
+
+    # 세부업종(반도체·은행 등) 결합. KRX 업종명은 이미 한글입니다.
+    # 실패해도 시세 수집을 막지 않습니다 -- 업종은 보조 정보입니다.
+    try:
+        cls = fetch_kr_classification(all_df["date"].max())
+        if not cls.empty:
+            all_df = all_df.merge(cls, on="ticker", how="left")
+            # KRX 대분류가 따로 없으므로 sector 도 업종명으로 채웁니다.
+            all_df["sector"] = all_df.get("sector").fillna(all_df["industry"]) \
+                if "sector" in all_df.columns else all_df["industry"]
+    except Exception as exc:  # noqa: BLE001
+        warnings.append(f"업종분류 조회 실패 (시세는 정상): {exc}")
+
     rows = store.upsert_prices("KR", all_df)
     store.log_ingest("KR", "prices", end, rows)
     return IngestResult(

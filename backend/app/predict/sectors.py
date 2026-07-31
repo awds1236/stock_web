@@ -43,6 +43,7 @@ def aggregate_to_sector(
     *,
     weight: str = "equal",
     value_col: str = "market_cap",
+    group_col: str = "sector",
 ) -> pd.DataFrame:
     """종목 패널을 섹터 × 일자 시계열로 집계.
 
@@ -54,10 +55,14 @@ def aggregate_to_sector(
     동일가중으로 둔 이유는 소수 대형주가 업종 시그널을 지배하는 것을 막기
     위해서입니다.
     """
-    if "sector" not in panel.columns:
-        raise ValueError("sector 컬럼이 없습니다. attach_sector 를 먼저 호출하십시오.")
+    if group_col not in panel.columns:
+        raise ValueError(f"{group_col} 컬럼이 없습니다. attach_sector 를 먼저 호출하십시오.")
 
     df = panel.copy()
+    # 대분류(sector) 외에 세분류(industry)로도 같은 집계를 씁니다. 출력 컬럼명은
+    # 'sector' 로 통일해 하위 함수(상대강도·breadth)가 그대로 동작하게 합니다.
+    if group_col != "sector":
+        df["sector"] = df[group_col]
     df["date"] = pd.to_datetime(df["date"])
     df = df.dropna(subset=["sector"])
     if df.empty:
@@ -110,7 +115,7 @@ def sector_index(sector_returns: pd.DataFrame, base: float = 100.0) -> pd.DataFr
                "n_constituents"]]
 
 
-def sector_breadth(panel: pd.DataFrame) -> pd.DataFrame:
+def sector_breadth(panel: pd.DataFrame, *, group_col: str = "sector") -> pd.DataFrame:
     """섹터별 상승 종목 비율 (breadth).
 
     해석:
@@ -118,9 +123,11 @@ def sector_breadth(panel: pd.DataFrame) -> pd.DataFrame:
         올렸다는 뜻입니다. 업종 전반의 강세와 몇 종목의 강세는 다른 사건이며,
         섹터 시그널을 종목으로 옮길 때 이 구분이 중요합니다.
     """
-    if "sector" not in panel.columns:
-        raise ValueError("sector 컬럼이 없습니다.")
+    if group_col not in panel.columns:
+        raise ValueError(f"{group_col} 컬럼이 없습니다.")
     df = panel.copy()
+    if group_col != "sector":
+        df["sector"] = df[group_col]
     df["date"] = pd.to_datetime(df["date"])
     df["_ret"] = df.groupby("ticker", sort=False, group_keys=False)["close"].transform(
         lambda s: s.pct_change()

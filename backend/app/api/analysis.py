@@ -17,6 +17,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app.indicators import levels as lv
 from app.indicators import price as px
 from app.markets import MARKETS, get_market
 from app.predict import calibration as cal
@@ -45,6 +46,7 @@ class UniverseItem(BaseModel):
     ticker: str
     name: str | None
     sector: str | None
+    industry: str | None
     first_date: str
     last_date: str
     n_days: int
@@ -64,14 +66,23 @@ class IndicatorSeries(BaseModel):
     values: dict[str, list[float | None]]
 
 
+class LevelOut(BaseModel):
+    price: float
+    kind: str  # support | resistance
+    touches: int
+    distance_pct: float
+
+
 class StockDetailOut(BaseModel):
     market: str
     ticker: str
     name: str | None
     sector: str | None
+    industry: str | None
     prices: list[SeriesPoint]
     indicators: IndicatorSeries
     interpretation: list[dict]
+    levels: list[LevelOut]  # 지지/저항 참고선 (신호 아님 -- caveat 는 해석 카드에)
 
 
 class ForecastQuality(BaseModel):
@@ -163,6 +174,7 @@ def universe(market: str) -> list[UniverseItem]:
             ticker=r["ticker"],
             name=r["name"],
             sector=r["sector"],
+            industry=r.get("industry"),
             first_date=str(r["first_date"]),
             last_date=str(r["last_date"]),
             n_days=int(r["n_days"]),
@@ -195,11 +207,20 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
         "pct_from_52w_high": px.pct_from_52w_high(close),
     }
 
+    swing = lv.swing_levels(df["high"], df["low"], close)
+    cross_20_60 = lv.ma_cross(close, fast=20, slow=60)
+    cross_50_200 = lv.ma_cross(close, fast=50, slow=200)
+
     return StockDetailOut(
         market=market,
         ticker=ticker,
         name=df["name"].dropna().iloc[-1] if df["name"].notna().any() else None,
         sector=df["sector"].dropna().iloc[-1] if df["sector"].notna().any() else None,
+        industry=(
+            df["industry"].dropna().iloc[-1]
+            if "industry" in df.columns and df["industry"].notna().any()
+            else None
+        ),
         prices=[
             SeriesPoint(
                 date=str(r["date"]),
@@ -212,8 +233,75 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
             date=[str(d) for d in df["date"]],
             values={k: [_f(v) for v in s] for k, s in ind.items()},
         ),
-        interpretation=_interpret(ind),
+        interpretation=_interpret(ind) + _interpret_levels(swing, cross_20_60, cross_50_200),
+        levels=[
+            LevelOut(
+                price=round(x.price, 4),
+                kind=x.kind,
+                touches=x.touches,
+                distance_pct=round(x.distance_pct, 4),
+            )
+            for x in swing
+        ],
     )
+
+
+def _interpret_levels(swing, c1: lv.CrossState, c2: lv.CrossState) -> list[dict]:
+    """지지/저항·이동평균 교차 해석 카드.
+
+    이 둘은 이 앱에서 근거가 가장 약한 지표입니다. 해석 문구보다 한계 문구가
+    더 중요합니다 -- '골든크로스가 떴으니 매수' 로 읽히지 않게 씁니다.
+    """
+    out: list[dict] = []
+
+    supports = [x for x in swing if x.kind == "support"]
+    resistances = [x for x in swing if x.kind == "resistance"]
+    if supports or resistances:
+        near_s = max(supports, key=lambda x: x.price) if supports else None
+        near_r = min(resistances, key=lambda x: x.price) if resistances else None
+        parts = []
+        if near_s:
+            parts.append(
+                f"가까운 지지 후보 {near_s.price:,.0f} ({near_s.distance_pct * 100:+.1f}%, "
+                f"터치 {near_s.touches}회)"
+            )
+        if near_r:
+            parts.append(
+                f"가까운 저항 후보 {near_r.price:,.0f} ({near_r.distance_pct * 100:+.1f}%, "
+                f"터치 {near_r.touches}회)"
+            )
+        out.append({
+            "indicator": "지지/저항 (스윙 클러스터)",
+            "value": round(near_s.price if near_s else near_r.price, 2),
+            "state": f"수준 {len(swing)}개 감지",
+            "reading": ". ".join(parts) + ".",
+            "caveat": "지지/저항은 학술 근거가 약한 참고선입니다. 많은 참여자가 "
+                      "의식하는 가격대라는 자기실현 가설이 논리의 전부이며, 뚫리면 "
+                      "의미가 반전됩니다. 매매 신호가 아니라 차트 참고용입니다.",
+        })
+
+    for c, label in ((c1, "20/60일"), (c2, "50/200일")):
+        if c.state == "insufficient":
+            continue
+        state_kr = "정배열 (골든)" if c.state == "golden" else "역배열 (데드)"
+        if c.last_cross and c.days_since_cross is not None:
+            cross_kr = "골든크로스" if c.last_cross == "golden" else "데드크로스"
+            reading = (
+                f"현재 {state_kr}. 마지막 교차는 {c.days_since_cross}거래일 전 "
+                f"{cross_kr}입니다."
+            )
+        else:
+            reading = f"현재 {state_kr}. 표시 구간 내 교차 없음."
+        out.append({
+            "indicator": f"이동평균 교차 ({label})",
+            "value": 1.0 if c.state == "golden" else -1.0,
+            "state": state_kr,
+            "reading": reading,
+            "caveat": "이동평균 교차는 구조적으로 후행 신호이며, 단독 사용 성과에 "
+                      "대한 문헌 근거는 혼재합니다. 추세 확인용 서술이지 진입 "
+                      "신호가 아닙니다.",
+        })
+    return out
 
 
 def _interpret(ind: dict) -> list[dict]:
@@ -476,8 +564,15 @@ def _latest_scores(result, top_n: int) -> list[dict]:
 
 # ── 섹터 ──────────────────────────────────────────────────────────────────
 @router.get("/sectors/{market}", response_model=list[SectorRow])
-def sector_view(market: str):
-    """섹터 현황.
+def sector_view(
+    market: str,
+    level: str = Query("sector", pattern="^(sector|industry)$"),
+):
+    """섹터/세부업종 현황.
+
+    level=sector 는 대분류(미국 11개), level=industry 는 세분류(반도체·은행
+    수준)입니다. 대분류만으로는 '반도체'와 '소프트웨어'가 전부 Technology 로
+    뭉개지므로 세분류를 함께 제공합니다.
 
     섹터를 1급으로 다루는 이유: 섹터·국가 단위 아웃오브샘플 R² (0.29~0.95%)가
     개별종목(0.33~0.40%)과 동등하거나 더 높다는 문헌 근거가 있습니다.
@@ -485,12 +580,18 @@ def sector_view(market: str):
     _require_market(market)
     market = market.upper()
     panel = get_store().prices(market)
-    if panel.empty or panel["sector"].isna().all():
-        raise HTTPException(404, f"{market} 섹터 정보가 없습니다. 먼저 수집하십시오.")
+    if panel.empty:
+        raise HTTPException(404, f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
+    if level not in panel.columns or panel[level].isna().all():
+        raise HTTPException(
+            404,
+            f"{market} 의 {'세부업종' if level == 'industry' else '섹터'} 정보가 "
+            "없습니다. 데이터를 다시 수집하면 채워집니다.",
+        )
 
-    agg = sec.aggregate_to_sector(panel)
+    agg = sec.aggregate_to_sector(panel, group_col=level)
     rs = sec.relative_strength(agg, window=60)
-    breadth = sec.sector_breadth(panel)
+    breadth = sec.sector_breadth(panel, group_col=level)
 
     rows: list[SectorRow] = []
     for sector, group in rs.groupby("sector"):
@@ -510,6 +611,184 @@ def sector_view(market: str):
         )
     return sorted(rows, key=lambda r: r.ret_20d if r.ret_20d is not None else -999,
                   reverse=True)
+
+
+# ── 관찰 목록 (자동 스크리닝) ────────────────────────────────────────────
+class WatchSector(BaseModel):
+    sector: str
+    ret_20d: float | None
+    relative_strength_60d: float | None
+    breadth: float | None
+    n_constituents: int
+
+
+class WatchCandidate(BaseModel):
+    ticker: str
+    name: str | None
+    sector: str | None
+    industry: str | None
+    close: float | None
+    ret_20d: float | None
+    pct_from_52w_high: float | None
+    score: int
+    reasons: list[str]
+
+
+class WatchlistOut(BaseModel):
+    market: str
+    as_of: str
+    rising_sectors: list[WatchSector]
+    candidates: list[WatchCandidate]
+    rules: list[str]
+    caveat: str
+
+
+# 스크리닝 규칙. 각 규칙이 왜 들어갔는지가 응답에 그대로 노출됩니다 --
+# 근거를 숨긴 "추천"은 이 앱의 원칙(검증 없는 신호 금지)과 충돌하기 때문에,
+# 이 목록은 "규칙에 걸린 관찰 후보"로만 제시합니다.
+WATCH_RULES = [
+    "추세: 종가 > 20일선 > 60일선 (정배열)",
+    "최근 골든크로스: 20/60일선이 최근 15거래일 내 상향 교차",
+    "52주 고가 근접: 고점 대비 -5% 이내 (모멘텀 대용치, 문헌 근거 있음)",
+    "상대강도: 최근 60일 수익률이 유니버스 평균 초과",
+    "거래대금 급증: 최근 5일 평균이 60일 평균의 1.5배 이상",
+]
+
+
+@router.get("/watchlist/{market}", response_model=WatchlistOut)
+def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
+    """자동 관찰 목록: 상승 추세 업종 + 규칙 기반 종목 후보.
+
+    **매수 추천이 아닙니다.** 위 WATCH_RULES 에 걸린 종목을 점수순으로 보여줄
+    뿐이며, 각 후보에 어떤 규칙이 걸렸는지(reasons)를 함께 반환합니다. 이
+    규칙들의 예측력은 개별적으로 검증되지 않았고, 모멘텀 계열이라는 공통점만
+    문헌 근거가 있습니다. 화면은 반드시 이 한계를 함께 표시해야 합니다.
+    """
+    _require_market(market)
+    market = market.upper()
+    panel = get_store().prices(market)
+    if panel.empty:
+        raise HTTPException(404, f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
+
+    panel = panel.sort_values(["ticker", "date"])
+    as_of = str(pd.Timestamp(panel["date"].max()).date())
+
+    # ── 상승 추세 업종 (세분류 우선, 없으면 대분류) ──────────────────────
+    level = (
+        "industry"
+        if "industry" in panel.columns and panel["industry"].notna().any()
+        else "sector"
+    )
+    rising: list[WatchSector] = []
+    if panel[level].notna().any():
+        agg = sec.aggregate_to_sector(panel, group_col=level)
+        rs = sec.relative_strength(agg, window=60)
+        breadth = sec.sector_breadth(panel, group_col=level)
+        for name_, group in rs.groupby("sector"):
+            g = group.sort_values("date")
+            b = breadth[breadth["sector"] == name_].sort_values("date")
+            rs_val = g["rs_60"].dropna()
+            br_val = float(b["advancing"].iloc[-1]) if len(b) else None
+            rising.append(
+                WatchSector(
+                    sector=str(name_),
+                    ret_20d=_f(_cum(g["ret"].tail(20))),
+                    relative_strength_60d=_f(rs_val.iloc[-1]) if len(rs_val) else None,
+                    breadth=_f(br_val),
+                    n_constituents=int(g["n_constituents"].iloc[-1]) if len(g) else 0,
+                )
+            )
+        # 상대강도 상위 + 상승 비율 절반 이상 (소수 종목이 끌어올린 업종 제외)
+        rising = [
+            s for s in sorted(
+                rising,
+                key=lambda s: s.relative_strength_60d
+                if s.relative_strength_60d is not None else -9e9,
+                reverse=True,
+            )
+            if s.relative_strength_60d is not None and s.relative_strength_60d > 0
+            and (s.breadth is None or s.breadth >= 0.5)
+        ][:5]
+
+    # ── 종목 스크리닝 ────────────────────────────────────────────────────
+    candidates: list[WatchCandidate] = []
+    ret60_by_ticker: dict[str, float] = {}
+    for t, g in panel.groupby("ticker", sort=False):
+        c = g["close"].reset_index(drop=True)
+        if len(c) >= 61 and np.isfinite(c.iloc[-61]) and c.iloc[-61] > 0:
+            ret60_by_ticker[t] = float(c.iloc[-1] / c.iloc[-61] - 1)
+    universe_mean_ret60 = (
+        float(np.mean(list(ret60_by_ticker.values()))) if ret60_by_ticker else 0.0
+    )
+
+    for t, g in panel.groupby("ticker", sort=False):
+        g = g.reset_index(drop=True)
+        c = g["close"]
+        if len(c) < 70 or not np.isfinite(c.iloc[-1]):
+            continue
+
+        reasons: list[str] = []
+        sma20 = c.rolling(20).mean().iloc[-1]
+        sma60 = c.rolling(60).mean().iloc[-1]
+        if np.isfinite(sma20) and np.isfinite(sma60) and c.iloc[-1] > sma20 > sma60:
+            reasons.append("정배열 (종가>20일선>60일선)")
+
+        cross = lv.recent_cross_tag(c, fast=20, slow=60, within_days=15)
+        if cross == "golden":
+            reasons.append("최근 골든크로스 (20/60)")
+
+        hi52 = px.pct_from_52w_high(c).iloc[-1]
+        if np.isfinite(hi52) and hi52 > -0.05:
+            reasons.append("52주 고가 -5% 이내")
+
+        r60 = ret60_by_ticker.get(t)
+        if r60 is not None and r60 > universe_mean_ret60:
+            reasons.append("60일 상대강도 우위")
+
+        if "value" in g.columns and g["value"].notna().sum() >= 60:
+            v5 = g["value"].tail(5).mean()
+            v60 = g["value"].tail(60).mean()
+            if np.isfinite(v5) and np.isfinite(v60) and v60 > 0 and v5 / v60 >= 1.5:
+                reasons.append("거래대금 급증 (5일/60일 ≥1.5배)")
+
+        if not reasons:
+            continue
+        ret20 = (
+            float(c.iloc[-1] / c.iloc[-21] - 1)
+            if len(c) >= 21 and c.iloc[-21] > 0
+            else None
+        )
+        candidates.append(
+            WatchCandidate(
+                ticker=t,
+                name=g["name"].dropna().iloc[-1] if g["name"].notna().any() else None,
+                sector=g["sector"].dropna().iloc[-1]
+                if g["sector"].notna().any() else None,
+                industry=g["industry"].dropna().iloc[-1]
+                if "industry" in g.columns and g["industry"].notna().any() else None,
+                close=_f(c.iloc[-1]),
+                ret_20d=_f(ret20),
+                pct_from_52w_high=_f(hi52),
+                score=len(reasons),
+                reasons=reasons,
+            )
+        )
+
+    candidates.sort(key=lambda x: (-x.score, -(x.ret_20d or -9e9)))
+    return WatchlistOut(
+        market=market,
+        as_of=as_of,
+        rising_sectors=rising,
+        candidates=candidates[:top_stocks],
+        rules=WATCH_RULES,
+        caveat=(
+            "이 목록은 매수 추천이 아니라 규칙 기반 관찰 후보입니다. 규칙에 몇 개 "
+            "걸렸는지(score)를 점수로 쓸 뿐, 이 조합의 예측력은 검증되지 않았습니다. "
+            "모멘텀 계열 규칙이라는 공통점만 문헌 근거가 있으며, 예측 화면의 품질 "
+            "지표(skill score·IC)가 이 시장에서 낮다면 이 목록도 그만큼 회의적으로 "
+            "보아야 합니다."
+        ),
+    )
 
 
 # ── 수집 트리거 ───────────────────────────────────────────────────────────

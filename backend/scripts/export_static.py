@@ -126,6 +126,12 @@ def main() -> int:
                  required=required)
 
         dump(f"/api/sectors/{market}", f"sectors-{market}.json", required=False)
+        dump(
+            f"/api/sectors/{market}?level=industry",
+            f"sectors-{market}-industry.json",
+            required=False,
+        )
+        dump(f"/api/watchlist/{market}", f"watchlist-{market}.json", required=False)
 
         for target in FORECAST_TARGETS:
             print(f"예측 계산 중: {market}/{target} ({FORECAST_HORIZON}일)…")
