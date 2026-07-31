@@ -17,6 +17,7 @@ import pandas as pd
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
+from app import reports
 from app.indicators import levels as lv
 from app.indicators import price as px
 from app.markets import MARKETS, get_market
@@ -24,6 +25,7 @@ from app.predict import calibration as cal
 from app.predict import features as feat
 from app.predict import model as mdl
 from app.predict import sectors as sec
+from app.reports import WATCH_RULES, interpret_indicators, interpret_levels
 from app.store import get_store
 
 router = APIRouter(prefix="/api", tags=["analysis"])
@@ -330,7 +332,9 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
             date=[str(d) for d in df["date"]],
             values={k: [_f(v) for v in s] for k, s in ind.items()},
         ),
-        interpretation=_interpret(ind) + _interpret_levels(swing, cross_20_60, cross_50_200),
+        interpretation=(
+            interpret_indicators(df) + interpret_levels(swing, cross_20_60, cross_50_200)
+        ),
         levels=[
             LevelOut(
                 price=round(x.price, 4),
@@ -343,125 +347,50 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
     )
 
 
-def _interpret_levels(swing, c1: lv.CrossState, c2: lv.CrossState) -> list[dict]:
-    """지지/저항·이동평균 교차 해석 카드.
-
-    이 둘은 이 앱에서 근거가 가장 약한 지표입니다. 해석 문구보다 한계 문구가
-    더 중요합니다 -- '골든크로스가 떴으니 매수' 로 읽히지 않게 씁니다.
-    """
-    out: list[dict] = []
-
-    supports = [x for x in swing if x.kind == "support"]
-    resistances = [x for x in swing if x.kind == "resistance"]
-    if supports or resistances:
-        near_s = max(supports, key=lambda x: x.price) if supports else None
-        near_r = min(resistances, key=lambda x: x.price) if resistances else None
-        parts = []
-        if near_s:
-            parts.append(
-                f"가까운 지지 후보 {near_s.price:,.0f} ({near_s.distance_pct * 100:+.1f}%, "
-                f"터치 {near_s.touches}회)"
-            )
-        if near_r:
-            parts.append(
-                f"가까운 저항 후보 {near_r.price:,.0f} ({near_r.distance_pct * 100:+.1f}%, "
-                f"터치 {near_r.touches}회)"
-            )
-        out.append({
-            "indicator": "지지/저항 (스윙 클러스터)",
-            "value": round(near_s.price if near_s else near_r.price, 2),
-            "state": f"수준 {len(swing)}개 감지",
-            "reading": ". ".join(parts) + ".",
-            "caveat": "지지/저항은 학술 근거가 약한 참고선입니다. 많은 참여자가 "
-                      "의식하는 가격대라는 자기실현 가설이 논리의 전부이며, 뚫리면 "
-                      "의미가 반전됩니다. 매매 신호가 아니라 차트 참고용입니다.",
-        })
-
-    for c, label in ((c1, "20/60일"), (c2, "50/200일")):
-        if c.state == "insufficient":
-            continue
-        state_kr = "정배열 (골든)" if c.state == "golden" else "역배열 (데드)"
-        if c.last_cross and c.days_since_cross is not None:
-            cross_kr = "골든크로스" if c.last_cross == "golden" else "데드크로스"
-            reading = (
-                f"현재 {state_kr}. 마지막 교차는 {c.days_since_cross}거래일 전 "
-                f"{cross_kr}입니다."
-            )
-        else:
-            reading = f"현재 {state_kr}. 표시 구간 내 교차 없음."
-        out.append({
-            "indicator": f"이동평균 교차 ({label})",
-            "value": 1.0 if c.state == "golden" else -1.0,
-            "state": state_kr,
-            "reading": reading,
-            "caveat": "이동평균 교차는 구조적으로 후행 신호이며, 단독 사용 성과에 "
-                      "대한 문헌 근거는 혼재합니다. 추세 확인용 서술이지 진입 "
-                      "신호가 아닙니다.",
-        })
-    return out
-
-
-def _interpret(ind: dict) -> list[dict]:
-    """지표 해석 -- **매매 신호가 아니라 상태 서술**입니다.
-
-    'RSI 30 이하이므로 매수' 같은 문구를 내지 않습니다. 문헌상 단일 기술적
-    지표의 예측력은 약하고, 특히 RSI 는 추세장에서 과매수 구간에 머문 채 계속
-    오르기 때문입니다. 각 항목에 한계를 함께 실어 보냅니다.
-    """
-    out: list[dict] = []
-
-    rsi = ind["rsi_14"].dropna()
-    if len(rsi):
-        v = float(rsi.iloc[-1])
-        state = "과매수 구간" if v >= 70 else ("과매도 구간" if v <= 30 else "중립 구간")
-        out.append({
-            "indicator": "RSI(14)",
-            "value": round(v, 1),
-            "state": state,
-            "reading": f"현재 RSI 는 {v:.1f} 로 {state}입니다.",
-            "caveat": "추세장에서는 과매수 구간에 머문 채 계속 오릅니다. "
-                      "단독 매매 신호로 쓰면 상승장에서 조기 매도를 반복합니다.",
-        })
-
-    sma20, sma60 = ind["sma_20"].dropna(), ind["sma_60"].dropna()
-    if len(sma20) and len(sma60):
-        above = float(sma20.iloc[-1]) > float(sma60.iloc[-1])
-        out.append({
-            "indicator": "이동평균 20/60",
-            "value": round(float(sma20.iloc[-1]) / float(sma60.iloc[-1]) - 1, 4),
-            "state": "단기 우위" if above else "장기 우위",
-            "reading": f"20일선이 60일선 {'위' if above else '아래'}에 있습니다.",
-            "caveat": "이동평균은 구조적으로 가격을 뒤따릅니다. 추세 판별 필터로는 "
-                      "쓸모가 있으나 진입 타이밍 근거로는 약합니다.",
-        })
-
-    vol = ind["vol_20d"].dropna()
-    if len(vol):
-        v = float(vol.iloc[-1])
-        out.append({
-            "indicator": "실현변동성(20일, 연율)",
-            "value": round(v, 4),
-            "state": "높음" if v > 0.4 else ("낮음" if v < 0.2 else "보통"),
-            "reading": f"연율 환산 변동성은 {v * 100:.1f}% 입니다.",
-            "caveat": "변동성은 방향이 아니라 폭입니다. 다만 수익률 방향보다 "
-                      "예측 가능성이 훨씬 높아, 포지션 크기 결정에 유용합니다.",
-        })
-
-    hi = ind["pct_from_52w_high"].dropna()
-    if len(hi):
-        v = float(hi.iloc[-1])
-        out.append({
-            "indicator": "52주 고점 대비",
-            "value": round(v, 4),
-            "state": "신고가 부근" if v > -0.05 else "고점 대비 하락",
-            "reading": f"52주 고점 대비 {v * 100:.1f}% 위치입니다.",
-            "caveat": "모멘텀 대용치로 문헌 근거가 있는 편이지만, 국내 시장의 "
-                      "모멘텀 효과는 미국 대비 약하다는 연구가 있습니다.",
-        })
-    return out
-
-
 # ── 예측 ──────────────────────────────────────────────────────────────────
+# 워크포워드 예측 캐시.
+#
+# 왜 필요한가: 워크포워드는 이 앱에서 가장 비싼 연산입니다(수십 초). 종목
+# 화면에서 "이 종목의 예측"을 볼 때마다 유니버스 전체를 다시 학습시키면 쓸
+# 수 없는 기능이 됩니다. 횡단면 모형이라 종목 하나만 떼어 학습할 수는 없으므로,
+# 전체는 한 번만 돌리고 결과를 재사용합니다.
+#
+# 무효화 기준은 **데이터 자체**입니다(마지막 일자 + 행 수). 시간 기반 TTL 로
+# 두면 자동 수집이 새 데이터를 넣어도 옛 예측이 남아, 화면의 시세와 예측이
+# 다른 날짜를 가리키게 됩니다.
+_FORECAST_CACHE: dict[tuple, tuple[tuple, ForecastOut]] = {}
+_FORECAST_TOP_N_CACHED = 100  # top_n 상한만큼 담아두고 응답에서 잘라 씁니다
+
+
+def _data_stamp(market: str) -> tuple:
+    with get_store().cursor() as con:
+        row = con.execute(
+            "SELECT max(date), count(*) FROM prices WHERE market = ?", [market]
+        ).fetchone()
+    return (str(row[0]), int(row[1] or 0))
+
+
+def cached_forecast(market: str, target: str, horizon_days: int) -> ForecastOut:
+    """캐시가 유효하면 재사용, 아니면 계산. 캐시 미스는 수십 초가 걸립니다."""
+    key = (market, target, horizon_days)
+    stamp = _data_stamp(market)
+    hit = _FORECAST_CACHE.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    out = _compute_forecast(market, target, horizon_days)
+    _FORECAST_CACHE[key] = (stamp, out)
+    return out
+
+
+def invalidate_forecast_cache(market: str | None = None) -> None:
+    """수집 직후 호출. 데이터 스탬프로도 걸리지만 명시적으로 비워둡니다."""
+    if market is None:
+        _FORECAST_CACHE.clear()
+        return
+    for key in [k for k in _FORECAST_CACHE if k[0] == market.upper()]:
+        del _FORECAST_CACHE[key]
+
+
 @router.get("/forecast/{market}", response_model=ForecastOut)
 def forecast(
     market: str,
@@ -477,7 +406,11 @@ def forecast(
         volatility -- 미래 변동성 (문헌상 가장 예측 가능한 대상)
     """
     _require_market(market)
-    market = market.upper()
+    full = cached_forecast(market.upper(), target, horizon_days)
+    return full.model_copy(update={"latest": full.latest[:top_n]})
+
+
+def _compute_forecast(market: str, target: str, horizon_days: int) -> ForecastOut:
     panel = get_store().prices(market)
     if len(panel) < MIN_ROWS_FOR_FORECAST:
         raise HTTPException(
@@ -511,7 +444,7 @@ def forecast(
         market=market,
         target=target,
         horizon_days=horizon_days,
-        latest=_latest_scores(result, top_n),
+        latest=_latest_scores(result, _FORECAST_TOP_N_CACHED),
         quality=_quality(result, df, ranked, label_col, target, horizon_days, cfg),
         caveat=get_market(market).flow_caveat,
     )
@@ -740,18 +673,6 @@ class WatchlistOut(BaseModel):
     caveat: str
 
 
-# 스크리닝 규칙. 각 규칙이 왜 들어갔는지가 응답에 그대로 노출됩니다 --
-# 근거를 숨긴 "추천"은 이 앱의 원칙(검증 없는 신호 금지)과 충돌하기 때문에,
-# 이 목록은 "규칙에 걸린 관찰 후보"로만 제시합니다.
-WATCH_RULES = [
-    "추세: 종가 > 20일선 > 60일선 (정배열)",
-    "최근 골든크로스: 20/60일선이 최근 15거래일 내 상향 교차",
-    "52주 고가 근접: 고점 대비 -5% 이내 (모멘텀 대용치, 문헌 근거 있음)",
-    "상대강도: 최근 60일 수익률이 유니버스 평균 초과",
-    "거래대금 급증: 최근 5일 평균이 60일 평균의 1.5배 이상",
-]
-
-
 @router.get("/watchlist/{market}", response_model=WatchlistOut)
 def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
     """자동 관찰 목록: 상승 추세 업종 + 규칙 기반 종목 후보.
@@ -818,38 +739,19 @@ def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
         float(np.mean(list(ret60_by_ticker.values()))) if ret60_by_ticker else 0.0
     )
 
+    # 규칙 판정은 reports.matched_rules 하나만 씁니다. 여기에 규칙을 복사해
+    # 두면 종목 화면과 관찰 목록이 서로 다른 판정을 내놓게 되고, 그건 사용자가
+    # 발견할 방법이 없는 종류의 버그입니다.
     for t, g in panel.groupby("ticker", sort=False):
         g = g.reset_index(drop=True)
         c = g["close"]
         if len(c) < 70 or not np.isfinite(c.iloc[-1]):
             continue
 
-        reasons: list[str] = []
-        sma20 = c.rolling(20).mean().iloc[-1]
-        sma60 = c.rolling(60).mean().iloc[-1]
-        if np.isfinite(sma20) and np.isfinite(sma60) and c.iloc[-1] > sma20 > sma60:
-            reasons.append("정배열 (종가>20일선>60일선)")
-
-        cross = lv.recent_cross_tag(c, fast=20, slow=60, within_days=15)
-        if cross == "golden":
-            reasons.append("최근 골든크로스 (20/60)")
-
-        hi52 = px.pct_from_52w_high(c).iloc[-1]
-        if np.isfinite(hi52) and hi52 > -0.05:
-            reasons.append("52주 고가 -5% 이내")
-
-        r60 = ret60_by_ticker.get(t)
-        if r60 is not None and r60 > universe_mean_ret60:
-            reasons.append("60일 상대강도 우위")
-
-        if "value" in g.columns and g["value"].notna().sum() >= 60:
-            v5 = g["value"].tail(5).mean()
-            v60 = g["value"].tail(60).mean()
-            if np.isfinite(v5) and np.isfinite(v60) and v60 > 0 and v5 / v60 >= 1.5:
-                reasons.append("거래대금 급증 (5일/60일 ≥1.5배)")
-
+        reasons = reports.matched_rules(g, universe_mean_ret60)
         if not reasons:
             continue
+        hi52 = px.pct_from_52w_high(c).iloc[-1]
         ret20 = (
             float(c.iloc[-1] / c.iloc[-21] - 1)
             if len(c) >= 21 and c.iloc[-21] > 0
@@ -888,6 +790,143 @@ def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
     )
 
 
+# ── 종목/섹터/시장 단위 분석 (버튼으로 실행) ─────────────────────────────
+#
+# 왜 "전부 계산해서 보여주기"를 하지 않는가:
+#     유니버스 300종목을 전부 분석하면 화면이 뜨기까지 수십 초가 걸리고, 그
+#     대부분은 사용자가 보지도 않을 종목의 계산입니다. 대신 **보고 있는
+#     대상만** 계산합니다. 예측(워크포워드)은 유니버스 전체가 필요한 유일한
+#     항목이라 별도 플래그로 분리하고, 계산 결과는 캐시해 재사용합니다.
+class StockAnalysisOut(BaseModel):
+    report: dict
+    forecast: ForecastOut | None
+    forecast_error: str | None  # 예측만 실패해도 나머지 분석은 유효합니다
+
+
+class ReportOut(BaseModel):
+    report: dict
+
+
+@router.get("/analyze/stock/{market}/{ticker}", response_model=StockAnalysisOut)
+def analyze_stock(
+    market: str,
+    ticker: str,
+    include_forecast: bool = Query(
+        False,
+        description="워크포워드 예측 포함. 캐시가 없으면 수십 초 걸립니다.",
+    ),
+    target: str = Query("direction", pattern="^(direction|return|volatility)$"),
+    horizon_days: int = Query(21, ge=5, le=120),
+):
+    """종목 하나에 대한 분석. 기본은 즉시 응답, 예측은 선택입니다."""
+    _require_market(market)
+    market = market.upper()
+    try:
+        report = reports.stock_report(market, ticker)
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+    fc: ForecastOut | None = None
+    err: str | None = None
+    if include_forecast:
+        try:
+            full = cached_forecast(market, target, horizon_days)
+            fc = full.model_copy(
+                update={
+                    "latest": [r for r in full.latest if r["ticker"] == ticker]
+                    or full.latest[:0]
+                }
+            )
+            if not fc.latest:
+                err = (
+                    f"{ticker} 는 마지막 예측 시점의 횡단면에 포함되지 않았습니다 "
+                    "(특성 계산에 필요한 과거 데이터가 부족한 경우입니다). "
+                    "품질 지표는 유니버스 전체 기준으로 유효합니다."
+                )
+        except HTTPException as exc:
+            # 예측 실패가 지표 분석까지 막으면 안 됩니다. 이유만 전달합니다.
+            err = str(exc.detail)
+    return StockAnalysisOut(report=report, forecast=fc, forecast_error=err)
+
+
+@router.get("/analyze/sector/{market}", response_model=ReportOut)
+def analyze_sector(
+    market: str,
+    sector: str = Query(..., description="업종명 (섹터 화면의 행 이름)"),
+    level: str = Query("industry", pattern="^(sector|industry)$"),
+):
+    _require_market(market)
+    try:
+        return ReportOut(report=reports.sector_report(market.upper(), sector, level=level))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/analyze/market/{market}", response_model=ReportOut)
+def analyze_market(market: str):
+    """시장 전체 현황 + 규칙에 걸린 주목 종목."""
+    _require_market(market)
+    try:
+        return ReportOut(report=reports.market_report(market.upper()))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+# ── 현재가 (자동 갱신용) ─────────────────────────────────────────────────
+class QuoteOut(BaseModel):
+    market: str
+    ticker: str
+    price: float | None
+    previous_close: float | None
+    change: float | None
+    change_pct: float | None
+    currency: str | None
+    source: str  # live | stored
+    as_of: str | None
+    note: str
+
+
+@router.get("/quote/{market}/{ticker}", response_model=QuoteOut)
+def quote(market: str, ticker: str) -> QuoteOut:
+    """현재가. **지연 시세이며 체결 가격이 아닙니다** -- note 를 함께 표시할 것."""
+    _require_market(market)
+    market = market.upper()
+    stored = get_store().prices(market, [ticker])
+    if stored.empty:
+        raise HTTPException(404, f"{market}/{ticker} 데이터가 없습니다. 먼저 수집하십시오.")
+    stored = stored.sort_values("date")
+    last_close = _f(stored["close"].iloc[-1])
+    prev_close = _f(stored["close"].iloc[-2]) if len(stored) >= 2 else None
+    as_of = str(pd.Timestamp(stored["date"].iloc[-1]).date())
+
+    if market == "US":
+        from app.providers.quote import fetch_us_quote
+
+        live = fetch_us_quote(ticker)
+        if live.source == "live" and live.price is not None:
+            base = live.previous_close if live.previous_close is not None else last_close
+            return QuoteOut(
+                market=market, ticker=ticker,
+                price=live.price, previous_close=base,
+                change=_f(live.price - base) if base else None,
+                change_pct=_f(live.price / base - 1) if base else None,
+                currency=live.currency, source="live", as_of=None, note=live.note,
+            )
+        note = f"{live.note} 저장된 마지막 종가({as_of})를 표시합니다."
+    else:
+        from app.providers.quote import KR_NOTE
+
+        note = KR_NOTE
+
+    return QuoteOut(
+        market=market, ticker=ticker,
+        price=last_close, previous_close=prev_close,
+        change=_f(last_close - prev_close) if (last_close and prev_close) else None,
+        change_pct=_f(last_close / prev_close - 1) if (last_close and prev_close) else None,
+        currency=get_market(market).currency, source="stored", as_of=as_of, note=note,
+    )
+
+
 # ── 수집 트리거 ───────────────────────────────────────────────────────────
 class IngestOut(BaseModel):
     market: str
@@ -923,6 +962,10 @@ def ingest(
         )
     except ProviderError as exc:
         raise HTTPException(409, str(exc)) from exc
+
+    # 새 데이터가 들어왔으므로 예측 캐시는 무효입니다. 남겨두면 화면의 시세와
+    # 예측이 서로 다른 날짜를 가리킵니다.
+    invalidate_forecast_cache(market)
 
     return IngestOut(
         market=res.market, rows=res.rows, tickers=res.tickers,

@@ -1,8 +1,10 @@
 """FastAPI 애플리케이션.
 
-현재는 설정(인증정보) API 만 노출합니다. 데이터 수집·시그널·백테스트 라우터는
-Phase 1 이후에 붙습니다 -- 검증되지 않은 시그널을 API 로 내보내지 않는다는
-원칙 때문입니다.
+라우터 구성:
+    settings  인증정보(암호화) + 비밀이 아닌 환경설정
+    analysis  시세·지표·섹터·예측 + **대상 단위 분석**(종목/섹터/시장)
+    ai        AI 서술 분석 실행과 그 이력
+    refresh   주가 자동 수집 상태와 수동 실행
 """
 
 from __future__ import annotations
@@ -13,7 +15,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import refresh as refresh_service
+from app.api.ai_router import router as ai_router
 from app.api.analysis import router as analysis_router
+from app.api.refresh_router import router as refresh_router
 from app.api.settings_router import router as settings_router
 from app.config import settings
 from app.markets import MARKETS
@@ -23,7 +28,14 @@ from app.store import StoreLocked
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     settings.ensure_dirs()
-    yield
+    # 스케줄러는 항상 뜨지만, 설정에서 켜지 않았으면 아무것도 하지 않습니다.
+    # 켜고 끄는 것을 재시작 없이 설정에서 바꿀 수 있어야 하므로, 루프 자체는
+    # 상시 돌면서 매 tick 마다 설정을 다시 읽습니다.
+    refresh_service.start()
+    try:
+        yield
+    finally:
+        await refresh_service.stop()
 
 
 app = FastAPI(
@@ -46,6 +58,8 @@ app.add_middleware(
 
 app.include_router(settings_router)
 app.include_router(analysis_router)
+app.include_router(ai_router)
+app.include_router(refresh_router)
 
 
 @app.exception_handler(StoreLocked)
