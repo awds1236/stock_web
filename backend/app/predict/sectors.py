@@ -76,22 +76,41 @@ def aggregate_to_sector(
     else:
         df["_w"] = 1.0
 
-    def _agg(group: pd.DataFrame) -> pd.Series:
-        valid = group.dropna(subset=["_ret"])
-        total_w = valid["_w"].sum()
-        ret = (
-            float((valid["_ret"] * valid["_w"]).sum() / total_w)
-            if total_w > 0
-            else np.nan
-        )
-        return pd.Series({"ret": ret, "n_constituents": int(len(valid))})
+    # 가중평균과 개수를 **벡터화**해서 구합니다.
+    #
+    # 이전 구현은 (일자 × 섹터) 그룹마다 파이썬 함수를 호출했습니다. 10년 ×
+    # 11업종이면 그룹이 2만 7천 개가 되고, 그 자체로 30초가 걸립니다 -- 이
+    # 함수는 섹터 화면·시장 분석·업종 분석이 모두 호출하므로 화면 지연의
+    # 대부분을 차지했습니다 (프로파일로 확인: 72초 중 66초).
+    #
+    # 결과는 이전과 **완전히 동일**해야 합니다. 특히 수익률이 전부 결측인
+    # 그룹(각 종목의 첫 거래일)도 ret=NaN, n_constituents=0 으로 남아야
+    # 하므로, 유효 행만으로 집계한 뒤 전체 (일자 × 섹터) 조합에 다시
+    # 맞춥니다. 그 행들을 빼버리면 출력 행 수가 달라집니다.
+    keys = ["date", "sector"]
+    full = df[keys].drop_duplicates().sort_values(keys)
 
-    out = (
-        df.groupby(["date", "sector"], sort=True)[["_ret", "_w"]]
-        .apply(lambda x: _agg(x.assign(_ret=x["_ret"], _w=x["_w"])))
-        .reset_index()
+    valid = df.dropna(subset=["_ret"])
+    if valid.empty:
+        out = full.copy()
+        out["ret"] = np.nan
+        out["n_constituents"] = 0
+        return out.reset_index(drop=True)
+
+    weighted = valid.assign(_wr=valid["_ret"] * valid["_w"]).groupby(keys, sort=True)
+    total_w = weighted["_w"].sum()
+    ret = weighted["_wr"].sum() / total_w
+    ret = ret.where(total_w > 0)  # 가중치 합이 0이면 정의되지 않습니다
+
+    out = full.merge(
+        pd.DataFrame(
+            {"ret": ret, "n_constituents": weighted["_ret"].size().astype(int)}
+        ).reset_index(),
+        on=keys,
+        how="left",
     )
-    return out
+    out["n_constituents"] = out["n_constituents"].fillna(0).astype(int)
+    return out.reset_index(drop=True)
 
 
 def sector_index(sector_returns: pd.DataFrame, base: float = 100.0) -> pd.DataFrame:
@@ -132,13 +151,19 @@ def sector_breadth(panel: pd.DataFrame, *, group_col: str = "sector") -> pd.Data
     df["_ret"] = df.groupby("ticker", sort=False, group_keys=False)["close"].transform(
         lambda s: s.pct_change()
     )
-    out = (
-        df.dropna(subset=["_ret", "sector"])
-        .groupby(["date", "sector"], sort=True)["_ret"]
-        .agg(advancing=lambda s: float((s > 0).mean()), n="size")
+    # `aggregate_to_sector` 와 같은 이유로 벡터화했습니다 -- 람다를 그룹마다
+    # 부르면 (일자 × 섹터) 조합 수만큼 파이썬 호출이 발생합니다. '상승 비율'은
+    # 불리언의 평균이므로 그룹 평균 한 번으로 끝납니다.
+    valid = df.dropna(subset=["_ret", "sector"])
+    if valid.empty:
+        return pd.DataFrame(columns=["date", "sector", "advancing", "n"])
+    grouped = valid.assign(_up=(valid["_ret"] > 0)).groupby(["date", "sector"], sort=True)
+    return (
+        pd.DataFrame(
+            {"advancing": grouped["_up"].mean().astype(float), "n": grouped["_ret"].size()}
+        )
         .reset_index()
     )
-    return out
 
 
 def relative_strength(
