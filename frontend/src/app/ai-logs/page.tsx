@@ -2,7 +2,8 @@
 
 import { Markdown } from "@/components/Markdown";
 import { api, type AILog } from "@/lib/api";
-import { useBackend } from "@/lib/useBackend";
+import { Freshness } from "@/components/Freshness";
+import { useBackend, usePolling } from "@/lib/useBackend";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -13,6 +14,9 @@ function plain(md: string | null): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** 이력은 다른 탭에서도 늘어납니다. 열어둔 목록이 그것을 놓치지 않게 합니다. */
+const LOGS_POLL_MS = 60_000;
 
 const KIND_LABEL: Record<string, string> = {
   stock: "종목",
@@ -56,9 +60,12 @@ function Inner() {
   const [error, setError] = useState<string | null>(null);
   const [showFacts, setShowFacts] = useState(false);
 
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+
   const load = useCallback(async () => {
     try {
       setLogs(await api.aiLogs({ kind: kind || undefined, market: market || undefined }));
+      setUpdatedAt(Date.now());
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -68,6 +75,8 @@ function Inner() {
   useEffect(() => {
     load();
   }, [load]);
+
+  usePolling(load, LOGS_POLL_MS, [load]);
 
   // 다른 화면의 "기록 보기" 링크(?id=...)로 들어온 경우 그 항목을 바로 엽니다.
   useEffect(() => {
@@ -118,6 +127,8 @@ function Inner() {
           <span className="muted">{logs.length}건</span>
         </div>
       </div>
+
+      <Freshness updatedAt={updatedAt} onRefresh={load} intervalMs={LOGS_POLL_MS} />
 
       {error && (
         <div className="banner warn">
