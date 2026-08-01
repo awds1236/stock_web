@@ -7,6 +7,7 @@ import {
   type RefreshStatus,
 } from "@/lib/api";
 import { setApiBase, storedApiBase } from "@/lib/backend";
+import { fetchBrowserQuotes } from "@/lib/liveQuote";
 import { useBackend, useRelativeTime } from "@/lib/useBackend";
 import { useCallback, useEffect, useState } from "react";
 
@@ -23,6 +24,7 @@ export default function SettingsPage() {
       {/* 연결 설정은 **항상** 보여야 합니다. 백엔드가 없을 때 이 화면까지
           막아버리면, 백엔드를 연결할 방법 자체가 사라집니다. */}
       <BackendConnection />
+      <QuoteDiagnostic />
 
       {backend.mode === "live" ? (
         <SettingsInner />
@@ -129,6 +131,105 @@ function BackendConnection() {
           다만 이 사이트가 https 라면 브라우저가 http 백엔드 호출을 차단합니다
           (혼합 콘텐츠). 그때는 로컬 프론트엔드(<code>npm run dev</code>)를
           쓰거나 백엔드를 https 로 노출하십시오.
+        </div>
+      </div>
+    </>
+  );
+}
+
+/**
+ * 실시간 가격 진단.
+ *
+ * 왜 필요한가: 브라우저가 시세 소스를 직접 부르는 경로는 **소스가 CORS 를
+ * 허용하는지**에 달려 있는데, 이건 사용자의 브라우저·네트워크·시점에 따라
+ * 달라집니다. 개발 환경에서 확인한 결과가 사용자 환경에서 같으리라는 보장이
+ * 없습니다.
+ *
+ * 그래서 추측하게 두지 않고 **직접 눌러 확인**하게 합니다. 실패하면 무엇을
+ * 하면 되는지(백엔드 연결)까지 같은 자리에서 알려줍니다.
+ */
+function QuoteDiagnostic() {
+  const backend = useBackend();
+  const [result, setResult] = useState<
+    | { ok: true; text: string }
+    | { ok: false; text: string }
+    | null
+  >(null);
+  const [busy, setBusy] = useState(false);
+
+  async function check() {
+    setBusy(true);
+    setResult(null);
+    try {
+      if (backend.mode === "live") {
+        const [q] = await api.quotes("US", ["AAPL"]);
+        setResult(
+          q?.source === "live"
+            ? { ok: true, text: `백엔드가 AAPL 현재가 ${q.price} 를 받아왔습니다.` }
+            : {
+                ok: false,
+                text:
+                  `백엔드는 연결되었지만 시세 소스에서 값을 받지 못했습니다. ` +
+                  `${q?.note ?? ""} 저장된 종가로 표시됩니다.`,
+              },
+        );
+      } else {
+        const quotes = await fetchBrowserQuotes("US", ["AAPL"]);
+        const q = quotes.get("AAPL");
+        setResult(
+          q
+            ? {
+                ok: true,
+                text: `브라우저가 직접 AAPL 현재가 ${q.price} 를 받아왔습니다 (${q.source}). 1분마다 갱신됩니다.`,
+              }
+            : { ok: false, text: "응답은 왔지만 가격이 비어 있습니다." },
+        );
+      }
+    } catch (e) {
+      setResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <h3>실시간 가격 진단</h3>
+      <div className="card">
+        <div className="row">
+          <button onClick={check} disabled={busy}>
+            {busy ? "확인 중…" : "지금 확인"}
+          </button>
+          <span className="muted" style={{ fontSize: 12 }}>
+            AAPL 로 한 번 조회해 봅니다
+          </span>
+        </div>
+
+        {result && (
+          <div
+            className={`banner ${result.ok ? "info" : "warn"}`}
+            style={{ marginTop: 10 }}
+          >
+            <strong>{result.ok ? "가격 갱신이 동작합니다" : "가격 갱신이 막혀 있습니다"}</strong>
+            {result.text}
+            {!result.ok && (
+              <div style={{ marginTop: 6 }}>
+                위의 <strong>백엔드 연결</strong>에 주소를 넣으면 서버가 대신
+                조회하므로 이 제약을 받지 않습니다.
+              </div>
+            )}
+          </div>
+        )}
+
+        <div className="caveat" style={{ marginTop: 10 }}>
+          백엔드 없이 쓰는 브라우저 직접 조회는 비공식 무료 엔드포인트에
+          의존합니다. 소스가 CORS 를 막거나 규격을 바꾸면 실패하며, 그건 환경마다
+          다를 수 있어 <strong>여기서 직접 확인하는 것이 유일하게 확실한
+          방법</strong>입니다.
+        </div>
+        <div className="caveat">
+          성공해도 <strong>실시간이 아닙니다.</strong> 무료 소스는 통상 15분 이상
+          지연되며, 갱신 주기를 줄여도 이 지연은 줄지 않습니다.
         </div>
       </div>
     </>
