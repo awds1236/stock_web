@@ -1,9 +1,14 @@
 "use client";
 
 import { ForecastQualityPanel } from "@/components/ForecastQualityPanel";
+import { Freshness } from "@/components/Freshness";
 import { api, STATIC_HORIZON, type Forecast } from "@/lib/api";
-import { useBackend } from "@/lib/useBackend";
+import { useBackend, usePolling } from "@/lib/useBackend";
 import { useCallback, useEffect, useState } from "react";
+
+/** 예측 재조회 주기. 캐시가 유효하면 즉시 돌아오고, 새 데이터가 들어왔으면
+    다시 계산합니다 -- 열어둔 탭이 낡은 예측을 붙들고 있지 않게 합니다. */
+const FORECAST_POLL_MS = 600_000;
 
 const TARGETS = [
   {
@@ -35,18 +40,24 @@ export default function ForecastPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const run = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    setData(null);
-    try {
-      setData(await api.forecast(market, target, horizon));
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, [market, target, horizon, live]);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+
+  const run = useCallback(
+    async (clear = true) => {
+      setLoading(true);
+      setError(null);
+      if (clear) setData(null);
+      try {
+        setData(await api.forecast(market, target, horizon));
+        setUpdatedAt(Date.now());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [market, target, horizon, live],
+  );
 
   // 백엔드 연결이 끊기면 스냅샷에 있는 기간으로 되돌립니다. 그대로 두면
   // "스냅샷에는 21일만 있습니다" 오류만 계속 보게 됩니다.
@@ -57,6 +68,8 @@ export default function ForecastPage() {
   useEffect(() => {
     run();
   }, [run]);
+
+  usePolling(() => run(false), FORECAST_POLL_MS, [run]);
 
   const t = TARGETS.find((x) => x.id === target)!;
 
@@ -91,12 +104,19 @@ export default function ForecastPage() {
             <option value={STATIC_HORIZON}>21일 (1개월)</option>
             {live && <option value={63}>63일 (3개월)</option>}
           </select>
-          <button onClick={run} disabled={loading}>
+          <button onClick={() => run()} disabled={loading}>
             {loading ? "계산 중…" : "다시 계산"}
           </button>
         </div>
         <div className="caveat">{t.hint}</div>
       </div>
+
+      <Freshness
+        updatedAt={updatedAt}
+        onRefresh={() => run(false)}
+        loading={loading}
+        intervalMs={FORECAST_POLL_MS}
+      />
 
       {error && (
         <div className="banner warn">

@@ -114,6 +114,15 @@ function lastClose(result: unknown): number | null {
 // 순서가 곧 우선순위입니다.
 const SOURCES: Source[] = [yahooChart];
 
+/**
+ * 브라우저가 한 번에 조회할 종목 수 상한.
+ *
+ * 종목마다 요청이 하나입니다. 표에 30종목이 있으면 1분마다 30번의 요청이
+ * 한 브라우저에서 나가고, 그건 무료 소스가 차단으로 응답하기 딱 좋은 양입니다.
+ * 백엔드 경로에는 서버 쪽 상한이 따로 있습니다.
+ */
+export const MAX_BROWSER_QUOTES = 12;
+
 /** 이 시장을 브라우저에서 직접 조회할 수 있는가. */
 export function browserQuotesSupported(market: string): boolean {
   return market.toUpperCase() === "US";
@@ -137,10 +146,11 @@ export async function fetchBrowserQuotes(
   if (!browserQuotesSupported(market)) throw new QuoteUnavailable(KR_BROWSER_NOTE);
   if (tickers.length === 0) return new Map();
 
+  const capped = tickers.slice(0, MAX_BROWSER_QUOTES);
   const errors: string[] = [];
   for (const source of SOURCES) {
     try {
-      return await source.fetchQuotes(tickers);
+      return await source.fetchQuotes(capped);
     } catch (e) {
       errors.push(`${source.name}: ${e instanceof Error ? e.message : String(e)}`);
     }

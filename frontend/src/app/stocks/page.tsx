@@ -1,6 +1,7 @@
 "use client";
 
 import { AIAnalysisCard } from "@/components/AIAnalysisCard";
+import { Freshness } from "@/components/Freshness";
 import { LiveQuote } from "@/components/LiveQuote";
 import { StockSearch } from "@/components/StockSearch";
 import {
@@ -12,6 +13,7 @@ import {
   type UniverseItem,
 } from "@/lib/api";
 import { industryLabel, sectorLabel } from "@/lib/sectorNames";
+import { usePolling } from "@/lib/useBackend";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   CartesianGrid,
@@ -24,6 +26,9 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+
+/** 차트·지표 재조회 주기. 백엔드에서 수집이 돌면 마지막 봉이 갱신됩니다. */
+const DETAIL_POLL_MS = 300_000;
 
 export default function StocksPage() {
   const [market, setMarket] = useState("US");
@@ -71,21 +76,37 @@ export default function StocksPage() {
   // 종목을 고르면 차트·지표는 **자동으로** 불러옵니다. 이건 저장된 데이터를
   // 읽는 값싼 작업이라 버튼 뒤에 둘 이유가 없습니다. 버튼 뒤에 두는 것은
   // 유니버스 전체를 훑는 분석과 유료인 AI 호출뿐입니다.
-  const load = useCallback(async () => {
-    if (!ticker) return;
-    setAnalysis(null);
-    setAnalysisError(null);
-    try {
-      setDetail(await api.stock(market, ticker));
-      setError(null);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    }
-  }, [market, ticker]);
+  const [detailUpdatedAt, setDetailUpdatedAt] = useState<number | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
+
+  const load = useCallback(
+    async (clear = true) => {
+      if (!ticker) return;
+      setDetailLoading(true);
+      if (clear) {
+        setAnalysis(null);
+        setAnalysisError(null);
+      }
+      try {
+        setDetail(await api.stock(market, ticker));
+        setDetailUpdatedAt(Date.now());
+        setError(null);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setDetailLoading(false);
+      }
+    },
+    [market, ticker],
+  );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // 자동 재조회는 분석 결과를 지우지 않습니다. 5분마다 방금 실행한 분석이
+  // 사라지면, 사용자는 버튼을 다시 눌러야 하는 이유를 알 수 없습니다.
+  usePolling(() => load(false), DETAIL_POLL_MS, [load]);
 
   const runAnalysis = useCallback(async () => {
     if (!ticker) return;
@@ -170,6 +191,15 @@ export default function StocksPage() {
             market={market}
             ticker={ticker}
             fallbackClose={detail.prices.at(-1)?.close ?? null}
+          />
+
+          <Freshness
+            updatedAt={detailUpdatedAt}
+            onRefresh={() => load(false)}
+            loading={detailLoading}
+            intervalMs={DETAIL_POLL_MS}
+            asOf={detail.prices.at(-1)?.date?.slice(0, 10) ?? null}
+            extra={<span>· 차트·지표는 일별 데이터 (가격만 1분 주기)</span>}
           />
 
           <div className="card" style={{ height: 320 }}>
