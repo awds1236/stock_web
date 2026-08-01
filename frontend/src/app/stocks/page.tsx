@@ -166,7 +166,11 @@ export default function StocksPage() {
             ) : null}
           </h3>
 
-          <LiveQuote market={market} ticker={ticker} />
+          <LiveQuote
+            market={market}
+            ticker={ticker}
+            fallbackClose={detail.prices.at(-1)?.close ?? null}
+          />
 
           <div className="card" style={{ height: 320 }}>
             <ResponsiveContainer width="100%" height="100%">

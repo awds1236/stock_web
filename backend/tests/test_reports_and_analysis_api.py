@@ -153,19 +153,85 @@ class TestAnalysisApi:
 
 
 class TestQuote:
-    def test_kr_falls_back_to_stored_close_with_reason(self, client, store):
-        panel = make_panel(n_days=30, n_tickers=2, seed=1)
+    @pytest.fixture
+    def kr(self, client, store):
+        panel = make_panel(n_days=30, n_tickers=3, seed=1)
         panel["name"] = "테스트"
         store.upsert_prices("KR", panel)
-        ticker = sorted(panel["ticker"].unique())[0]
+        return sorted(panel["ticker"].unique())
 
-        body = client.get(f"/api/quote/KR/{ticker}").json()
+    def test_kr_falls_back_to_stored_close_with_reason(self, client, kr):
+        body = client.get(f"/api/quote/KR/{kr[0]}").json()
         assert body["source"] == "stored"
         assert body["price"] is not None
         assert "장중" in body["note"], "왜 실시간이 아닌지 설명해야 합니다"
 
     def test_unknown_ticker_is_404(self, client):
         assert client.get("/api/quote/US/NOPE").status_code == 404
+
+    def test_batch_returns_one_row_per_known_ticker(self, client, kr):
+        body = client.get(f"/api/quotes/KR?tickers={','.join(kr)}").json()
+        assert [r["ticker"] for r in body] == kr
+
+    def test_batch_skips_unknown_instead_of_failing_all(self, client, kr):
+        """목록에 모르는 종목 하나가 있다고 표 전체의 가격이 사라지면 안 됩니다."""
+        resp = client.get(f"/api/quotes/KR?tickers=NOPE,{kr[0]}")
+        assert resp.status_code == 200
+        assert [r["ticker"] for r in resp.json()] == [kr[0]]
+
+    def test_batch_is_capped(self, client, kr, monkeypatch):
+        """상한이 없으면 한 번의 요청이 수백 번의 외부 호출이 됩니다."""
+        from app.api import analysis as api
+
+        monkeypatch.setattr(api, "MAX_BATCH_QUOTES", 2)
+        body = client.get(f"/api/quotes/KR?tickers={','.join(kr)}").json()
+        assert len(body) == 2
+
+    def test_batch_of_nothing_is_empty_not_error(self, client):
+        assert client.get("/api/quotes/KR?tickers=").json() == []
+
+    def test_us_batch_falls_back_when_source_unreachable(self, client, monkeypatch):
+        """시세 소스가 막혀도 가격 칸이 비면 안 됩니다 -- 출처만 바뀝니다."""
+        from app.providers.quote import LiveQuote
+
+        monkeypatch.setattr(
+            "app.providers.quote.fetch_us_quote",
+            lambda t: LiveQuote(None, None, None, "unavailable", "차단됨"),
+        )
+        body = client.get("/api/quotes/US?tickers=WINNER").json()
+        assert body[0]["source"] == "stored"
+        assert body[0]["price"] is not None
+        assert "차단됨" in body[0]["note"], "왜 저장값인지 밝혀야 합니다"
+
+    def test_us_batch_uses_live_price_when_available(self, client, monkeypatch):
+        from app.providers.quote import LiveQuote
+
+        monkeypatch.setattr(
+            "app.providers.quote.fetch_us_quote",
+            lambda t: LiveQuote(123.0, 100.0, "USD", "live", "지연 시세"),
+        )
+        body = client.get("/api/quotes/US?tickers=WINNER").json()
+        assert body[0]["source"] == "live"
+        assert body[0]["price"] == 123.0
+        assert body[0]["change_pct"] == pytest.approx(0.23)
+
+
+class TestCorsOrigins:
+    """정적 배포에서 이 백엔드를 부르려면 그 출처가 허용되어야 합니다."""
+
+    def test_local_dev_is_always_allowed(self):
+        from app.config import Settings
+
+        assert "http://localhost:3000" in Settings(cors_origins="").cors_origin_list()
+
+    def test_extra_origins_are_parsed_and_normalized(self):
+        from app.config import Settings
+
+        got = Settings(
+            cors_origins="https://a.github.io/ , https://b.dev"
+        ).cors_origin_list()
+        assert "https://a.github.io" in got
+        assert "https://b.dev" in got
 
 
 def _fake_forecast():

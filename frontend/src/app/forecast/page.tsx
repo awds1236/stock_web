@@ -1,7 +1,8 @@
 "use client";
 
 import { ForecastQualityPanel } from "@/components/ForecastQualityPanel";
-import { api, IS_STATIC, STATIC_HORIZON, type Forecast } from "@/lib/api";
+import { api, STATIC_HORIZON, type Forecast } from "@/lib/api";
+import { useBackend } from "@/lib/useBackend";
 import { useCallback, useEffect, useState } from "react";
 
 const TARGETS = [
@@ -23,6 +24,10 @@ const TARGETS = [
 ];
 
 export default function ForecastPage() {
+  const backend = useBackend();
+  // 백엔드가 붙어 있으면 임의의 기간을 직접 계산할 수 있습니다. 스냅샷에는
+  // CI 시간을 아끼려고 21일만 구워두므로 선택지를 그에 맞춰 줄입니다.
+  const live = backend.mode === "live";
   const [market, setMarket] = useState("US");
   const [target, setTarget] = useState("direction");
   const [horizon, setHorizon] = useState(21);
@@ -41,7 +46,13 @@ export default function ForecastPage() {
     } finally {
       setLoading(false);
     }
-  }, [market, target, horizon]);
+  }, [market, target, horizon, live]);
+
+  // 백엔드 연결이 끊기면 스냅샷에 있는 기간으로 되돌립니다. 그대로 두면
+  // "스냅샷에는 21일만 있습니다" 오류만 계속 보게 됩니다.
+  useEffect(() => {
+    if (!live && horizon !== STATIC_HORIZON) setHorizon(STATIC_HORIZON);
+  }, [live, horizon]);
 
   useEffect(() => {
     run();
@@ -76,9 +87,9 @@ export default function ForecastPage() {
           >
             {/* 정적 스냅샷에는 21일 예측만 포함됩니다. 선택해도 실패할 옵션을
                 보여주는 대신 처음부터 빼둡니다. */}
-            {!IS_STATIC && <option value={5}>5일</option>}
+            {live && <option value={5}>5일</option>}
             <option value={STATIC_HORIZON}>21일 (1개월)</option>
-            {!IS_STATIC && <option value={63}>63일 (3개월)</option>}
+            {live && <option value={63}>63일 (3개월)</option>}
           </select>
           <button onClick={run} disabled={loading}>
             {loading ? "계산 중…" : "다시 계산"}

@@ -1,7 +1,9 @@
 "use client";
 
 import { Markdown } from "@/components/Markdown";
-import { api, IS_STATIC, type AILog } from "@/lib/api";
+import { api, type AILog } from "@/lib/api";
+import { useBackend } from "@/lib/useBackend";
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 /** 목록 미리보기용. `##` 나 `**` 가 그대로 보이면 읽기 어렵습니다. */
@@ -28,14 +30,17 @@ const KIND_LABEL: Record<string, string> = {
  * 확인할 수 없다면 AI 서술은 검증 불가능한 인상으로만 남습니다.
  */
 export default function AILogsPage() {
-  if (IS_STATIC) {
+  const backend = useBackend();
+  if (backend.mode !== "live") {
     return (
       <>
         <h2>AI 분석 기록</h2>
         <div className="banner info">
-          <strong>정적 배포에서는 사용할 수 없습니다</strong>
-          AI 분석은 API 키와 백엔드가 필요합니다. 기록은 로컬 실행의 데이터베이스에
-          저장되며, GitHub Pages 스냅샷에는 포함되지 않습니다.
+          <strong>백엔드를 연결해야 볼 수 있습니다</strong>
+          AI 분석 기록은 백엔드의 데이터베이스에 저장됩니다. 정적 스냅샷에는
+          포함되지 않습니다 — 분석 이력은 사용자마다 다르고, 공개 사이트에 실을
+          내용이 아니기 때문입니다.{" "}
+          <Link href="/settings">설정에서 백엔드 주소 연결 →</Link>
         </div>
       </>
     );

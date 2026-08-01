@@ -1,34 +1,68 @@
 "use client";
 
 import { AIAnalysisCard } from "@/components/AIAnalysisCard";
+import { Freshness, QuoteCell } from "@/components/Freshness";
 import { api, pct, type MarketReport } from "@/lib/api";
 import { groupLabel } from "@/lib/sectorNames";
+import { usePolling } from "@/lib/useBackend";
+import { useQuotes } from "@/lib/useQuotes";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+/**
+ * 시장 분석 갱신 주기.
+ *
+ * 가격보다 훨씬 깁니다. 이 화면의 집계는 일별 확정 데이터에서 나오므로
+ * 1분마다 다시 계산해도 같은 값이 나옵니다 -- 그런데도 자동 갱신을 두는
+ * 이유는, 백엔드에서 수집이 돌아 데이터가 바뀌었을 때 열어둔 탭이 그것을
+ * 알아채야 하기 때문입니다.
+ */
+const REPORT_POLL_MS = 300_000;
 
 export default function MarketPage() {
   const [market, setMarket] = useState("US");
   const [report, setReport] = useState<MarketReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    setReport(null);
-    try {
-      const r = await api.analyzeMarket(market);
-      setReport(r.report);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [market]);
+  const load = useCallback(
+    async (clear = true) => {
+      setBusy(true);
+      setError(null);
+      if (clear) setReport(null);
+      try {
+        const r = await api.analyzeMarket(market);
+        setReport(r.report);
+        setUpdatedAt(Date.now());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [market],
+  );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // 자동 갱신은 화면을 비우지 않습니다. 5분마다 표가 사라졌다 나타나면
+  // 읽는 도중에 내용이 날아갑니다.
+  usePolling(() => load(false), REPORT_POLL_MS, [load]);
+
+  // 주목 종목의 **현재가**. 분석 숫자는 일별이지만 가격은 지금 값이어야
+  // 합니다 -- 이 표를 보는 이유가 "지금 어떤지"이기 때문입니다.
+  const attentionTickers = useMemo(
+    () => (report?.attention ?? []).map((a) => a.ticker),
+    [report],
+  );
+  const fallbackCloses = useMemo(
+    () => new Map((report?.attention ?? []).map((a) => [a.ticker, a.close])),
+    [report],
+  );
+  const quotes = useQuotes(market, attentionTickers, { fallbackCloses });
 
   return (
     <>
@@ -45,12 +79,19 @@ export default function MarketPage() {
             <option value="US">미국</option>
             <option value="KR">한국</option>
           </select>
-          <button onClick={load} disabled={busy}>
+          <button onClick={() => load()} disabled={busy}>
             {busy ? "계산 중…" : "다시 계산"}
           </button>
-          {report && <span className="muted">기준일 {report.as_of}</span>}
         </div>
       </div>
+
+      <Freshness
+        updatedAt={updatedAt}
+        onRefresh={() => load(false)}
+        loading={busy}
+        intervalMs={REPORT_POLL_MS}
+        asOf={report?.as_of}
+      />
 
       {error && (
         <div className="banner warn">
@@ -112,11 +153,24 @@ export default function MarketPage() {
           </div>
 
           <h3>주목 종목 ({report.attention.length})</h3>
+          <Freshness
+            updatedAt={quotes.updatedAt}
+            onRefresh={quotes.refresh}
+            loading={quotes.loading}
+            intervalMs={60_000}
+            extra={<span>가격만 자동 갱신 · 나머지 수치는 기준일 값</span>}
+          />
           <div className="card">
+            {quotes.error && (
+              <div className="caveat" style={{ marginBottom: 8 }}>
+                현재가를 가져오지 못한 종목이 있습니다: {quotes.error}
+              </div>
+            )}
             <table>
               <thead>
                 <tr>
                   <th>종목</th>
+                  <th className="num">현재가</th>
                   <th className="num">20일</th>
                   <th className="num">52주 고점 대비</th>
                   <th className="num">규칙</th>
@@ -131,6 +185,9 @@ export default function MarketPage() {
                         {a.name ?? a.ticker}
                       </Link>
                       <span className="muted"> · {a.ticker}</span>
+                    </td>
+                    <td className="num">
+                      <QuoteCell quote={quotes.quotes.get(a.ticker)} fallback={a.close} />
                     </td>
                     <td className={`num ${cls(a.ret_20d)}`}>{pct(a.ret_20d)}</td>
                     <td className="num">{pct(a.pct_from_52w_high)}</td>

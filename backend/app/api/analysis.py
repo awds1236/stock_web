@@ -886,45 +886,105 @@ class QuoteOut(BaseModel):
     note: str
 
 
+MAX_BATCH_QUOTES = 30
+
+
 @router.get("/quote/{market}/{ticker}", response_model=QuoteOut)
 def quote(market: str, ticker: str) -> QuoteOut:
     """현재가. **지연 시세이며 체결 가격이 아닙니다** -- note 를 함께 표시할 것."""
     _require_market(market)
     market = market.upper()
-    stored = get_store().prices(market, [ticker])
-    if stored.empty:
+    out = _quotes(market, [ticker])
+    if not out:
         raise HTTPException(404, f"{market}/{ticker} 데이터가 없습니다. 먼저 수집하십시오.")
-    stored = stored.sort_values("date")
-    last_close = _f(stored["close"].iloc[-1])
-    prev_close = _f(stored["close"].iloc[-2]) if len(stored) >= 2 else None
-    as_of = str(pd.Timestamp(stored["date"].iloc[-1]).date())
+    return out[0]
 
-    if market == "US":
-        from app.providers.quote import fetch_us_quote
 
-        live = fetch_us_quote(ticker)
-        if live.source == "live" and live.price is not None:
-            base = live.previous_close if live.previous_close is not None else last_close
-            return QuoteOut(
-                market=market, ticker=ticker,
-                price=live.price, previous_close=base,
-                change=_f(live.price - base) if base else None,
-                change_pct=_f(live.price / base - 1) if base else None,
-                currency=live.currency, source="live", as_of=None, note=live.note,
-            )
-        note = f"{live.note} 저장된 마지막 종가({as_of})를 표시합니다."
-    else:
+@router.get("/quotes/{market}", response_model=list[QuoteOut])
+def quotes(
+    market: str,
+    tickers: str = Query(..., description="쉼표로 구분한 종목코드"),
+) -> list[QuoteOut]:
+    """여러 종목의 현재가를 한 번에.
+
+    표에 현재가를 붙이려면 종목마다 따로 요청할 수 없습니다. 12종목이면 12번의
+    왕복이 되고, 1분마다 갱신하면 무료 소스가 차단으로 응답합니다.
+
+    저장된 데이터가 없는 종목은 **조용히 빠집니다.** 404 로 전체를 실패시키면
+    목록에 하나라도 모르는 종목이 있을 때 표 전체의 가격이 사라집니다.
+    """
+    _require_market(market)
+    wanted = [t.strip() for t in tickers.split(",") if t.strip()][:MAX_BATCH_QUOTES]
+    if not wanted:
+        return []
+    return _quotes(market.upper(), wanted)
+
+
+def _quotes(market: str, tickers: list[str]) -> list[QuoteOut]:
+    """현재가 조립: 저장된 종가(항상) + 지연 시세(가능하면).
+
+    저장된 값을 먼저 채우는 이유는 **현재가 조회가 실패해도 화면이 비지 않게**
+    하기 위해서입니다. 시세 소스는 비공식이라 자주 실패하는데, 그때마다 가격이
+    사라지면 앱이 고장난 것처럼 보입니다. 대신 `source` 로 어느 쪽인지 항상
+    구분해 알립니다.
+    """
+    stored = get_store().prices(market, tickers)
+    if stored.empty:
+        return []
+    stored = stored.sort_values(["ticker", "date"])
+    currency = get_market(market).currency
+
+    live_by_ticker = {}
+    fallback_note = ""
+    present = [t for t in tickers if (stored["ticker"] == t).any()]
+    if market == "US" and present:
+        from app.providers.quote import fetch_us_quotes
+
+        live_by_ticker = fetch_us_quotes(present)
+    elif market == "KR":
         from app.providers.quote import KR_NOTE
 
-        note = KR_NOTE
+        fallback_note = KR_NOTE
 
-    return QuoteOut(
-        market=market, ticker=ticker,
-        price=last_close, previous_close=prev_close,
-        change=_f(last_close - prev_close) if (last_close and prev_close) else None,
-        change_pct=_f(last_close / prev_close - 1) if (last_close and prev_close) else None,
-        currency=get_market(market).currency, source="stored", as_of=as_of, note=note,
-    )
+    out: list[QuoteOut] = []
+    for ticker in present:
+        g = stored[stored["ticker"] == ticker]
+        last_close = _f(g["close"].iloc[-1])
+        prev_close = _f(g["close"].iloc[-2]) if len(g) >= 2 else None
+        as_of = str(pd.Timestamp(g["date"].iloc[-1]).date())
+
+        live = live_by_ticker.get(ticker)
+        if live is not None and live.source == "live" and live.price is not None:
+            base = live.previous_close if live.previous_close is not None else last_close
+            out.append(
+                QuoteOut(
+                    market=market, ticker=ticker,
+                    price=live.price, previous_close=base,
+                    change=_f(live.price - base) if base else None,
+                    change_pct=_f(live.price / base - 1) if base else None,
+                    currency=live.currency or currency,
+                    source="live", as_of=None, note=live.note,
+                )
+            )
+            continue
+
+        note = fallback_note or (
+            f"{live.note} 저장된 마지막 종가({as_of})를 표시합니다."
+            if live is not None
+            else f"저장된 마지막 종가({as_of})입니다."
+        )
+        out.append(
+            QuoteOut(
+                market=market, ticker=ticker,
+                price=last_close, previous_close=prev_close,
+                change=_f(last_close - prev_close) if (last_close and prev_close) else None,
+                change_pct=(
+                    _f(last_close / prev_close - 1) if (last_close and prev_close) else None
+                ),
+                currency=currency, source="stored", as_of=as_of, note=note,
+            )
+        )
+    return out
 
 
 # ── 수집 트리거 ───────────────────────────────────────────────────────────

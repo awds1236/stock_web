@@ -45,12 +45,23 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 로컬 개발용 프론트엔드(Next.js)만 허용합니다. 와일드카드로 열면 임의의
-# 사이트가 브라우저를 통해 설정 API 를 호출할 수 있습니다 -- 인증정보를 다루는
-# 엔드포인트가 있으므로 특히 위험합니다.
+# 허용 출처.
+#
+# 기본값은 로컬 개발 프론트엔드뿐입니다. 와일드카드로 열면 임의의 사이트가
+# 사용자의 브라우저를 통해 설정 API 를 호출할 수 있고, 여기에는 인증정보를
+# 입력·삭제하는 엔드포인트가 있습니다.
+#
+# 정적 배포(GitHub Pages)에서 이 백엔드를 쓰려면 그 출처를 명시적으로
+# 추가해야 합니다:
+#
+#     CORS_ORIGINS=https://<계정>.github.io
+#
+# 환경변수로만 열 수 있게 한 이유: 코드에 박아두면 이 저장소를 쓰는 모든
+# 배포가 같은 출처를 신뢰하게 됩니다. 누구를 신뢰할지는 배포하는 사람이
+# 정해야 합니다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=settings.cors_origin_list(),
     allow_credentials=True,
     allow_methods=["GET", "PUT", "DELETE", "POST"],
     allow_headers=["*"],

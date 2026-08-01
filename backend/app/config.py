@@ -21,6 +21,10 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 # 되어 "인증키가 설정되지 않았습니다" 라는 엉뚱한 오류를 보게 됩니다.
 ENV_FILE = BACKEND_ROOT / ".env"
 
+# 로컬 개발 프론트엔드는 항상 허용합니다. 이걸 빼면 개발자가 매번 환경변수를
+# 세팅해야 하고, 그 과정에서 `*` 를 넣고 싶어집니다.
+LOCAL_ORIGINS = ("http://localhost:3000", "http://127.0.0.1:3000")
+
 
 class CostModel(BaseSettings):
     """거래비용 모델.
@@ -68,6 +72,19 @@ class Settings(BaseSettings):
     data_dir: Path = BACKEND_ROOT / "data"
     cache_dir: Path = BACKEND_ROOT / "data" / "cache"
     duckdb_path: Path = BACKEND_ROOT / "data" / "stock.duckdb"
+
+    cors_origins: str = Field(
+        default="",
+        description="쉼표로 구분한 추가 허용 출처. 정적 배포(GitHub Pages)에서 이 "
+        "백엔드를 호출하려면 그 출처를 여기에 넣어야 합니다. 예: "
+        "https://user.github.io  ***`*` 를 넣지 마십시오*** -- 이 API 에는 "
+        "인증정보 입력 엔드포인트가 있어, 임의의 사이트가 사용자의 브라우저를 "
+        "통해 호출할 수 있게 됩니다.",
+    )
+
+    def cors_origin_list(self) -> list[str]:
+        extra = [o.strip().rstrip("/") for o in self.cors_origins.split(",") if o.strip()]
+        return [*LOCAL_ORIGINS, *extra]
 
     def ensure_dirs(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True)

@@ -69,6 +69,29 @@ def fetch_us_quote(ticker: str) -> LiveQuote:
     return LiveQuote(price, prev, currency, "live", DELAY_NOTE)
 
 
+def fetch_us_quotes(tickers: list[str], *, max_workers: int = 8) -> dict[str, LiveQuote]:
+    """여러 종목의 현재가를 한 번에.
+
+    표(관찰 목록·주목 종목)에 현재가를 붙이려면 종목마다 따로 요청할 수 없습니다.
+    화면 하나에 12개 종목이면 12번의 왕복이 되고, 1분마다 갱신하면 무료 소스가
+    차단으로 응답합니다.
+
+    스레드 풀을 쓰는 이유는 `fetch_us_quote` 한 경로만 유지하기 위해서입니다.
+    일괄 다운로드 API 를 따로 쓰면 단일 조회와 다른 코드로 다른 값을 만들 수
+    있고, 그건 표와 상세 화면의 가격이 어긋나는 형태로 나타납니다.
+
+    **호출자가 종목 수를 제한해야 합니다.** 이 함수는 받은 만큼 전부 요청합니다.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not tickers:
+        return {}
+    unique = list(dict.fromkeys(tickers))
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(unique))) as pool:
+        results = list(pool.map(fetch_us_quote, unique))
+    return dict(zip(unique, results, strict=True))
+
+
 def _failure_note(exc: Exception) -> str:
     return (
         "현재가 소스(yfinance)에 접근하지 못했습니다. 네트워크 차단, 요청 한도, "

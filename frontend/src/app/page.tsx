@@ -1,13 +1,25 @@
 "use client";
 
-import { api, IS_STATIC, type Coverage } from "@/lib/api";
+import { api, type Coverage } from "@/lib/api";
+import { HAS_SNAPSHOTS } from "@/lib/backend";
+import { useBackend, usePolling, useRelativeTime } from "@/lib/useBackend";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
+/** 데이터 현황 갱신 주기. 수집이 도는 동안 화면이 따라가야 합니다. */
+const COVERAGE_POLL_MS = 30_000;
+/** 스냅샷 모드에서 새 배포를 감지하는 주기. */
+const BUILD_POLL_MS = 60_000;
+
 export default function Home() {
+  const backend = useBackend();
+  const live = backend.mode === "live";
+
   const [coverage, setCoverage] = useState<Coverage[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
+  const [newBuild, setNewBuild] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [message, setMessage] = useState<{
     tone: "info" | "warn" | "bad";
     title: string;
@@ -17,29 +29,52 @@ export default function Home() {
   const load = useCallback(async () => {
     try {
       setCoverage(await api.coverage());
+      setUpdatedAt(Date.now());
+      setMessage(null);
     } catch (e) {
       setMessage({
         tone: "bad",
-        title: IS_STATIC
-          ? "데이터 스냅샷을 불러올 수 없습니다"
-          : "백엔드에 연결할 수 없습니다",
-        body: IS_STATIC
-          ? `배포 워크플로가 성공했는지 확인하십시오. (${String(e)})`
-          : `backend 가 실행 중인지 확인하십시오: uv run uvicorn app.main:app --port 8000 (${String(e)})`,
+        title: live
+          ? "백엔드에서 데이터 현황을 읽지 못했습니다"
+          : "데이터 스냅샷을 불러올 수 없습니다",
+        body: String(e instanceof Error ? e.message : e),
       });
     }
-    if (IS_STATIC) {
-      // 스냅샷 생성 시각 -- 없어도 치명적이지 않으므로 조용히 무시합니다.
-      api
-        .buildInfo()
-        .then((b) => setGeneratedAt(b.generated_at))
-        .catch(() => {});
-    }
-  }, []);
+  }, [live]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  usePolling(load, COVERAGE_POLL_MS, [load]);
+
+  /**
+   * 스냅샷 모드에서 **새 배포를 감지**합니다.
+   *
+   * 정적 사이트라도 탭을 열어둔 채 CI 가 새 데이터를 배포할 수 있습니다.
+   * 그때 화면이 아무 말도 하지 않으면, 사용자는 새로고침해야 한다는 사실을
+   * 알 방법이 없습니다 -- 배포된 페이지가 멈춰 보이는 이유 중 하나입니다.
+   */
+  const checkBuild = useCallback(async () => {
+    if (!HAS_SNAPSHOTS) return;
+    try {
+      const b = await api.buildInfo();
+      setGeneratedAt((prev) => {
+        if (prev && prev !== b.generated_at) setNewBuild(true);
+        return b.generated_at;
+      });
+    } catch {
+      /* 스냅샷 정보가 없어도 치명적이지 않습니다 */
+    }
+  }, []);
+
+  useEffect(() => {
+    checkBuild();
+  }, [checkBuild]);
+
+  usePolling(checkBuild, HAS_SNAPSHOTS ? BUILD_POLL_MS : 0, [checkBuild]);
+
+  const ago = useRelativeTime(updatedAt);
 
   async function runIngest(market: string) {
     setBusy(market);
@@ -77,6 +112,24 @@ export default function Home() {
         하지 않습니다.
       </p>
 
+      <div className="freshness">
+        <span>데이터 현황 {ago} 갱신</span>
+        <button className="ghost tiny" onClick={load}>
+          지금 갱신
+        </button>
+        {live && <span>· {COVERAGE_POLL_MS / 1000}초마다 자동</span>}
+      </div>
+
+      {newBuild && (
+        <div className="banner info">
+          <strong>새 스냅샷이 배포되었습니다</strong>
+          이 탭은 이전 배포의 데이터를 보고 있습니다.{" "}
+          <button className="tiny" onClick={() => window.location.reload()}>
+            새로고침
+          </button>
+        </div>
+      )}
+
       {message && (
         <div className={`banner ${message.tone}`}>
           <strong>{message.title}</strong>
@@ -84,17 +137,18 @@ export default function Home() {
         </div>
       )}
 
-      {IS_STATIC && (
+      {!live && HAS_SNAPSHOTS && (
         <div className="banner info">
-          <strong>GitHub Pages 정적 스냅샷</strong>
-          이 사이트는 GitHub Actions 가 주기적으로 생성하는 스냅샷입니다.
+          <strong>지금은 스냅샷을 보고 있습니다</strong>
+          분석·예측 수치는 GitHub Actions 가 만든 시점의 값입니다
           {generatedAt &&
-            ` 마지막 갱신: ${generatedAt.slice(0, 16).replace("T", " ")} UTC.`}{" "}
-          수집·설정 기능은 로컬 실행에서만 동작합니다.
+            ` (${generatedAt.slice(0, 16).replace("T", " ")} UTC 생성)`}
+          . 가격은 종목 화면에서 브라우저가 직접 갱신합니다. 수집·설정·AI 분석까지
+          쓰려면 백엔드를 연결하십시오 — <Link href="/settings">설정 →</Link>
         </div>
       )}
 
-      {!IS_STATIC && us && !us.ready && (
+      {live && us && !us.ready && (
         <div className="banner info">
           <strong>여기서 시작하세요 — 미국 주식은 인증키가 필요 없습니다</strong>
           아래 &quot;미국 데이터 수집&quot;을 누르면 바로 분석을 시작할 수
@@ -135,10 +189,10 @@ export default function Home() {
               </tbody>
             </table>
 
-            {IS_STATIC ? (
+            {!live ? (
               <div className="caveat" style={{ marginTop: 12 }}>
                 {c.ready
-                  ? "GitHub Actions 가 자동 갱신합니다."
+                  ? "GitHub Actions 가 주기적으로 갱신합니다. 백엔드를 연결하면 직접 수집할 수 있습니다."
                   : c.market === "KR"
                     ? "한국 데이터는 저장소 Secrets 에 KRX_AUTH_KEY 를 추가하면 다음 배포부터 포함됩니다."
                     : "다음 배포에서 갱신됩니다."}
@@ -148,7 +202,11 @@ export default function Home() {
                 <div className="caveat">
                   이 시장은 <code>{c.needs_credential}</code> 인증키가 필요합니다.
                 </div>
-                <Link href="/settings" className="btn" style={{ marginTop: 8, display: "inline-block" }}>
+                <Link
+                  href="/settings"
+                  className="btn"
+                  style={{ marginTop: 8, display: "inline-block" }}
+                >
                   설정에서 인증키 입력
                 </Link>
               </div>
@@ -180,7 +238,7 @@ export default function Home() {
             <Link href="/stocks" className="card">
               <strong>종목 분석</strong>
               <div className="muted">
-                종목을 고르면 차트·지표는 자동, 상대분석은 버튼으로
+                현재가 자동 갱신 + 종목 단위 분석
               </div>
             </Link>
             <Link href="/sectors" className="card">
@@ -191,9 +249,7 @@ export default function Home() {
             </Link>
             <Link href="/forecast" className="card">
               <strong>예측</strong>
-              <div className="muted">
-                보정된 확률과 그 확률의 신뢰도 곡선
-              </div>
+              <div className="muted">보정된 확률과 그 확률의 신뢰도 곡선</div>
             </Link>
             <Link href="/ai-logs" className="card">
               <strong>AI 분석 기록</strong>
@@ -203,9 +259,7 @@ export default function Home() {
             </Link>
             <Link href="/methodology" className="card">
               <strong>방법론</strong>
-              <div className="muted">
-                예측 성능의 현실적 상한과 근거 논문
-              </div>
+              <div className="muted">예측 성능의 현실적 상한과 근거 논문</div>
             </Link>
           </div>
         </>
@@ -223,8 +277,8 @@ export default function Home() {
             아웃오브샘플 품질과 함께 표시됩니다.
           </li>
           <li>
-            <strong>한국과 미국 시그널을 비교하지 않습니다.</strong> 한국은
-            투자자별 수급, 미국은 내부자 매매로 재는 대상이 다릅니다.
+            <strong>낡은 값을 지금 값처럼 보여주지 않습니다.</strong> 화면의 모든
+            숫자에 출처와 갱신 시각이 붙습니다.
           </li>
         </ul>
       </div>

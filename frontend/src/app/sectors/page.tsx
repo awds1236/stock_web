@@ -1,9 +1,15 @@
 "use client";
 
 import { AIAnalysisCard } from "@/components/AIAnalysisCard";
+import { Freshness } from "@/components/Freshness";
 import { api, pct, type SectorReport, type SectorRow } from "@/lib/api";
 import { groupLabel } from "@/lib/sectorNames";
+import { usePolling } from "@/lib/useBackend";
 import { useCallback, useEffect, useState } from "react";
+
+/** 업종 집계는 일별 데이터에서 나옵니다. 백엔드 수집이 돌면 알아채도록만
+    주기적으로 다시 읽습니다. */
+const SECTOR_POLL_MS = 300_000;
 
 export default function SectorsPage() {
   const [market, setMarket] = useState("US");
@@ -18,21 +24,36 @@ export default function SectorsPage() {
   const [busy, setBusy] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
 
-  useEffect(() => {
-    setRows([]);
-    setSelected(null);
-    setDetail(null);
-    api
-      .sectors(market, level)
-      .then((r) => {
-        setRows(r);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const loadRows = useCallback(
+    async (clear = true) => {
+      setLoading(true);
+      if (clear) {
+        setRows([]);
+        setSelected(null);
+        setDetail(null);
+      }
+      try {
+        setRows(await api.sectors(market, level));
+        setUpdatedAt(Date.now());
         setError(null);
-      })
-      .catch((e) => {
+      } catch (e) {
         setRows([]);
         setError(e instanceof Error ? e.message : String(e));
-      });
-  }, [market, level]);
+      } finally {
+        setLoading(false);
+      }
+    },
+    [market, level],
+  );
+
+  useEffect(() => {
+    loadRows();
+  }, [loadRows]);
+
+  usePolling(() => loadRows(false), SECTOR_POLL_MS, [loadRows]);
 
   const analyze = useCallback(
     async (sector: string) => {
@@ -81,6 +102,13 @@ export default function SectorsPage() {
           기본값을 세부업종으로 둔 이유입니다.
         </div>
       </div>
+
+      <Freshness
+        updatedAt={updatedAt}
+        onRefresh={() => loadRows(false)}
+        loading={loading}
+        intervalMs={SECTOR_POLL_MS}
+      />
 
       {error && (
         <div className="banner warn">

@@ -1,7 +1,8 @@
 "use client";
 
 import { Markdown } from "@/components/Markdown";
-import { api, IS_STATIC, type AILog, type AIStatus } from "@/lib/api";
+import { api, type AILog, type AIStatus } from "@/lib/api";
+import { useBackend } from "@/lib/useBackend";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
@@ -27,6 +28,8 @@ export function AIAnalysisCard({
   run: () => Promise<AILog>;
   historyQuery: { kind: string; market: string; subject: string };
 }) {
+  const backend = useBackend();
+  const live = backend.mode === "live";
   const [status, setStatus] = useState<AIStatus | null>(null);
   const [log, setLog] = useState<AILog | null>(null);
   const [busy, setBusy] = useState(false);
@@ -35,7 +38,7 @@ export function AIAnalysisCard({
   const loadPrevious = useCallback(async () => {
     setLog(null);
     setError(null);
-    if (IS_STATIC) return;
+    if (!live) return;
     try {
       setStatus(await api.aiStatus());
     } catch {
@@ -48,7 +51,7 @@ export function AIAnalysisCard({
       /* 이력이 없을 수도 있습니다 */
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyQuery.kind, historyQuery.market, historyQuery.subject]);
+  }, [historyQuery.kind, historyQuery.market, historyQuery.subject, live]);
 
   useEffect(() => {
     loadPrevious();
@@ -66,13 +69,14 @@ export function AIAnalysisCard({
     }
   }
 
-  if (IS_STATIC) {
+  if (!live) {
     return (
       <div className="card">
         <strong>{title}</strong>
         <div className="caveat" style={{ marginTop: 8 }}>
-          AI 분석은 API 키가 필요하므로 정적 배포(GitHub Pages)에서는 실행할 수
-          없습니다. 로컬 실행에서 설정에 키를 넣으면 사용할 수 있습니다.
+          AI 분석에는 백엔드가 필요합니다. API 키를 정적 사이트의 자바스크립트에
+          넣으면 그 키가 공개되기 때문입니다. 백엔드를 연결하면 이 버튼이
+          켜집니다 — <Link href="/settings">설정에서 주소 연결 →</Link>
         </div>
       </div>
     );

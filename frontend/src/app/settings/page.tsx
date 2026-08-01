@@ -2,33 +2,137 @@
 
 import {
   api,
-  IS_STATIC,
   type Credential,
   type Preferences,
   type RefreshStatus,
 } from "@/lib/api";
+import { setApiBase, storedApiBase } from "@/lib/backend";
+import { useBackend, useRelativeTime } from "@/lib/useBackend";
 import { useCallback, useEffect, useState } from "react";
 
 export default function SettingsPage() {
-  // 정적 배포에는 백엔드가 없으므로 설정 화면 자체가 동작할 수 없습니다.
-  // 빈 화면이나 알 수 없는 오류 대신 이유와 대안을 말합니다.
-  if (IS_STATIC) {
-    return (
-      <>
-        <h2>설정</h2>
+  const backend = useBackend();
+  return (
+    <>
+      <h2>설정</h2>
+      <p className="sub">
+        백엔드 연결은 이 브라우저에만 저장됩니다. 인증정보는 백엔드 안에
+        암호화되어 저장되며, 저장소(git)에는 들어가지 않습니다.
+      </p>
+
+      {/* 연결 설정은 **항상** 보여야 합니다. 백엔드가 없을 때 이 화면까지
+          막아버리면, 백엔드를 연결할 방법 자체가 사라집니다. */}
+      <BackendConnection />
+
+      {backend.mode === "live" ? (
+        <SettingsInner />
+      ) : (
         <div className="banner info">
-          <strong>정적 배포에서는 설정을 사용할 수 없습니다</strong>
-          GitHub Pages 는 정적 파일만 서빙하므로 인증정보를 저장할 백엔드가
-          없습니다. 한국(KRX) 데이터를 포함하려면 저장소의{" "}
+          <strong>나머지 설정은 백엔드가 연결되면 표시됩니다</strong>
+          인증정보(KRX·SEC·OpenAI 키)와 자동 수집 설정은 백엔드에 저장됩니다.
+          정적 사이트의 자바스크립트에 키를 두면 그 키가 공개되기 때문입니다.
+          한국(KRX) 데이터를 스냅샷에 포함하려면 저장소의{" "}
           <code>Settings → Secrets and variables → Actions</code> 에{" "}
-          <code>KRX_AUTH_KEY</code> secret 을 추가하십시오 — 다음 배포부터
-          반영됩니다. 로컬 실행(백엔드 포함)에서는 이 화면에서 직접 입력할 수
-          있습니다.
+          <code>KRX_AUTH_KEY</code> 를 추가하십시오.
         </div>
-      </>
-    );
+      )}
+    </>
+  );
+}
+
+/**
+ * 백엔드 주소 연결.
+ *
+ * 이 화면의 핵심입니다. 여기에 주소를 넣으면 **재배포 없이** 전 화면이
+ * 살아있는 데이터로 바뀝니다. 주소는 이 브라우저(localStorage)에만 남으므로
+ * 공개 사이트에 남의 백엔드 주소가 박히는 일이 없습니다.
+ */
+function BackendConnection() {
+  const backend = useBackend();
+  const ago = useRelativeTime(backend.checkedAt);
+  const [url, setUrl] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // 이 페이지는 빌드 시점에 HTML 로 미리 렌더링됩니다. 그때는 `window` 가
+  // 없으므로, 렌더 중에 `window.location.origin` 을 읽으면 서버 HTML 과
+  // 브라우저의 첫 렌더가 달라져 하이드레이션이 깨집니다 (실측 확인).
+  // 마운트 후에 채웁니다.
+  const [origin, setOrigin] = useState("");
+  useEffect(() => {
+    setOrigin(window.location.origin);
+  }, []);
+
+  useEffect(() => {
+    setUrl(storedApiBase() ?? "");
+  }, [backend.mode]);
+
+  async function connect(value: string | null) {
+    setBusy(true);
+    try {
+      await setApiBase(value);
+    } finally {
+      setBusy(false);
+    }
   }
-  return <SettingsInner />;
+
+  return (
+    <>
+      <h3>백엔드 연결</h3>
+      <div className="card">
+        <div className="row" style={{ justifyContent: "space-between" }}>
+          <strong>
+            {backend.mode === "live" ? "연결됨" : "연결 안 됨"}
+          </strong>
+          <span className="muted" style={{ fontSize: 12 }}>
+            마지막 확인 {ago}
+          </span>
+        </div>
+
+        <div className="row" style={{ marginTop: 10 }}>
+          <input
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="https://내-백엔드-주소 (비우면 같은 출처)"
+            style={{ maxWidth: 420 }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") connect(url);
+            }}
+          />
+          <button onClick={() => connect(url)} disabled={busy}>
+            {busy ? "확인 중…" : "연결"}
+          </button>
+          <button className="ghost" onClick={() => connect(null)} disabled={busy}>
+            기본값으로
+          </button>
+        </div>
+
+        {backend.error && backend.mode !== "live" && (
+          <div className="banner warn" style={{ marginTop: 10 }}>
+            <strong>연결 실패</strong>
+            {backend.error}
+          </div>
+        )}
+
+        <div className="caveat" style={{ marginTop: 10 }}>
+          주소는 <strong>이 브라우저에만</strong> 저장됩니다. 배포된 사이트에
+          박히지 않으므로, 같은 사이트를 여는 다른 사람에게는 영향이 없습니다.
+        </div>
+        <div className="caveat">
+          백엔드가 이 사이트의 출처를 허용해야 합니다. 백엔드 쪽에{" "}
+          <code>CORS_ORIGINS={origin || "https://<이 사이트 주소>"}</code> 를
+          환경변수로 넣으십시오. 넣지 않으면 브라우저가 요청을 막고, 그 실패는{" "}
+          &quot;연결하지 못했습니다&quot; 로만 보입니다 — CORS 차단과 네트워크
+          장애는 브라우저에서 구분되지 않기 때문입니다.
+        </div>
+        <div className="caveat">
+          로컬에서 백엔드를 띄웠다면 <code>http://127.0.0.1:8000</code> 입니다.
+          다만 이 사이트가 https 라면 브라우저가 http 백엔드 호출을 차단합니다
+          (혼합 콘텐츠). 그때는 로컬 프론트엔드(<code>npm run dev</code>)를
+          쓰거나 백엔드를 https 로 노출하십시오.
+        </div>
+      </div>
+    </>
+  );
 }
 
 function SettingsInner() {
@@ -78,11 +182,7 @@ function SettingsInner() {
 
   return (
     <>
-      <h2>설정</h2>
-      <p className="sub">
-        인증정보는 앱 안에 암호화되어 저장됩니다. 저장소(git)에는 들어가지
-        않습니다.
-      </p>
+      <h3>인증정보</h3>
 
       {msg && (
         <div className={`banner ${msg.tone}`}>
