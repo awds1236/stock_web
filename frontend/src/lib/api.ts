@@ -7,7 +7,7 @@
  * 장기 성장률을 음수로 만듭니다.
  */
 
-import { apiBase, BASE_PATH, HAS_SNAPSHOTS, isLive } from "@/lib/backend";
+import { apiBase, BASE_PATH, HAS_SNAPSHOTS, isLive, ready } from "@/lib/backend";
 
 export type Coverage = {
   market: string;
@@ -446,14 +446,20 @@ function noSource(what: string): never {
  * 백엔드가 살아 있으면 항상 그쪽입니다 -- 지금 이 순간의 값이기 때문입니다.
  * 없으면 스냅샷으로 물러나고, 스냅샷조차 없으면 이유를 말하고 실패합니다.
  */
-function read<T>(live: () => Promise<T>, snapshot: () => Promise<T>, what: string) {
+async function read<T>(
+  live: () => Promise<T>,
+  snapshot: () => Promise<T>,
+  what: string,
+): Promise<T> {
+  await ready();
   if (isLive()) return live();
   if (HAS_SNAPSHOTS) return snapshot();
   return noSource(what);
 }
 
 /** 쓰기 경로: 백엔드 없이는 불가능합니다. */
-function write<T>(live: () => Promise<T>): Promise<T> {
+async function write<T>(live: () => Promise<T>): Promise<T> {
+  await ready();
   return isLive() ? live() : needsBackend();
 }
 
@@ -476,7 +482,8 @@ export const api = {
       () => staticFile(`stocks-${market}-${ticker}.json`),
       `${ticker} 시세`,
     ),
-  forecast: (market: string, target: string, horizon: number) => {
+  forecast: async (market: string, target: string, horizon: number) => {
+    await ready();
     if (isLive())
       return req<Forecast>(
         `/api/forecast/${market}?target=${target}&horizon_days=${horizon}`,
@@ -511,12 +518,14 @@ export const api = {
       () => staticFile(`watchlist-${market}.json`),
       "관찰 목록",
     ),
-  search: async (market: string, q: string, limit = 20) =>
-    isLive()
+  search: async (market: string, q: string, limit = 20) => {
+    await ready();
+    return isLive()
       ? req<SearchHit[]>(
           `/api/search/${market}?q=${encodeURIComponent(q)}&limit=${limit}`,
         )
-      : searchLocally(await api.universe(market), q, limit),
+      : searchLocally(await api.universe(market), q, limit);
+  },
   buildInfo: () =>
     staticFile<{ generated_at: string; note: string }>("build-info.json"),
   credentials: () =>
