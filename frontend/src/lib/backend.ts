@@ -200,6 +200,21 @@ function describe(e: unknown, base: string): string {
   return `백엔드 확인 실패 (${base || "같은 출처"}): ${msg}`;
 }
 
+/**
+ * 첫 확인이 끝날 때까지 기다립니다.
+ *
+ * 왜 필요한가: 확인이 끝나기 전에는 모드가 기본값(스냅샷)입니다. 그 상태로
+ * 데이터를 읽으면 **백엔드가 살아 있는 배포에서도 첫 화면이 스냅샷을 한 번
+ * 요청**하고, 스냅샷이 없는 배포에서는 "가져올 곳이 없습니다" 오류가 잠깐
+ * 스쳤다가 사라집니다 (실측 확인). 읽기 전에 한 번만 기다리면 둘 다 없어집니다.
+ *
+ * 이미 확인이 끝났으면 즉시 반환하므로 이후 요청은 지연되지 않습니다.
+ */
+export function ready(): Promise<BackendStatus> {
+  if (status.checkedAt !== null) return Promise.resolve(status);
+  return probe();
+}
+
 /** 주기적 재확인 시작. 앱 레이아웃에서 한 번만 호출합니다. */
 export function startProbing(): () => void {
   probe();
