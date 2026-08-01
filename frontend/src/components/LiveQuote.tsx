@@ -1,0 +1,126 @@
+"use client";
+
+import { pct } from "@/lib/api";
+import { useRelativeTime } from "@/lib/useBackend";
+import {
+  DEFAULT_QUOTE_INTERVAL_MS,
+  isMoving,
+  ORIGIN_LABEL,
+  useQuotes,
+} from "@/lib/useQuotes";
+import { useMemo, useState } from "react";
+
+const INTERVALS = [
+  { ms: 15_000, label: "15초" },
+  { ms: 30_000, label: "30초" },
+  { ms: 60_000, label: "1분" },
+  { ms: 300_000, label: "5분" },
+];
+
+/**
+ * 종목 상세 상단의 현재가.
+ *
+ * **실시간이 아니라는 것을 화면에서 숨기지 않습니다.** 무료 소스는 지연
+ * 시세이고 한국은 장중 소스가 아예 없습니다. 숫자만 크게 띄우면 사용자는
+ * 체결 가격으로 읽습니다 -- 그래서 출처 배지와 설명을 항상 함께 둡니다.
+ *
+ * 값이 시간에 따라 움직이지 않는 경우(스냅샷 종가)에는 **갱신 표시를 아예
+ * 다르게** 합니다. "10초 전 갱신"이라고 쓰면 그 값이 10초 전 시세인 것처럼
+ * 읽히는데, 실제로는 며칠 전 종가일 수 있습니다.
+ */
+export function LiveQuote({
+  market,
+  ticker,
+  /** 스냅샷에 있는 마지막 종가. 시세 조회가 막혀도 가격 칸이 비지 않게 합니다. */
+  fallbackClose,
+}: {
+  market: string;
+  ticker: string;
+  fallbackClose?: number | null;
+}) {
+  const [intervalMs, setIntervalMs] = useState(DEFAULT_QUOTE_INTERVAL_MS);
+  const tickers = useMemo(() => [ticker], [ticker]);
+  const fallbackCloses = useMemo(
+    () => new Map([[ticker, fallbackClose ?? null]]),
+    [ticker, fallbackClose],
+  );
+  const { quotes, updatedAt, error, loading, refresh } = useQuotes(market, tickers, {
+    intervalMs,
+    fallbackCloses,
+  });
+  const ago = useRelativeTime(updatedAt);
+  const quote = quotes.get(ticker);
+
+  if (!quote) {
+    return (
+      <div className="card">
+        <span className="muted">
+          {loading ? "현재가를 불러오는 중…" : `현재가를 가져오지 못했습니다. ${error ?? ""}`}
+        </span>
+      </div>
+    );
+  }
+
+  const moving = isMoving(quote.origin);
+  const tone =
+    quote.change === null ? "" : quote.change > 0 ? "pos" : quote.change < 0 ? "neg" : "";
+
+  return (
+    <div className="card">
+      <div className="row" style={{ justifyContent: "space-between" }}>
+        <div className="row" style={{ gap: 14 }}>
+          <span
+            style={{ fontSize: 24, fontWeight: 600, fontVariantNumeric: "tabular-nums" }}
+          >
+            {quote.price === null
+              ? "—"
+              : quote.price.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+          </span>
+          {quote.change !== null && (
+            <span className={tone} style={{ fontSize: 14 }}>
+              {`${quote.change > 0 ? "+" : ""}${quote.change.toLocaleString(undefined, {
+                maximumFractionDigits: 2,
+              })} (${pct(quote.changePct)})`}
+            </span>
+          )}
+          <span className="muted" style={{ fontSize: 11 }}>
+            {quote.currency ?? ""}
+          </span>
+        </div>
+
+        <div className="row" style={{ gap: 8 }}>
+          <span className={`badge ${moving ? "" : "stale"}`}>
+            {ORIGIN_LABEL[quote.origin]}
+          </span>
+          {moving ? (
+            <>
+              <span className="muted" style={{ fontSize: 11 }}>
+                {ago} 갱신
+              </span>
+              <select
+                value={intervalMs}
+                onChange={(e) => setIntervalMs(Number(e.target.value))}
+                style={{ height: 24, fontSize: 11, padding: "0 4px" }}
+                title="현재가 갱신 주기"
+              >
+                {INTERVALS.map((i) => (
+                  <option key={i.ms} value={i.ms}>
+                    {i.label}마다
+                  </option>
+                ))}
+              </select>
+            </>
+          ) : (
+            <span className="muted" style={{ fontSize: 11 }}>
+              움직이지 않는 값
+            </span>
+          )}
+          <button className="ghost tiny" onClick={refresh} disabled={loading}>
+            {loading ? "…" : "새로고침"}
+          </button>
+        </div>
+      </div>
+      <div className="caveat">{quote.note}</div>
+    </div>
+  );
+}

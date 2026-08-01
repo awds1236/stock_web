@@ -1,0 +1,119 @@
+"""현재가 조회 -- 화면이 스스로 갱신되게 만드는 최소 조각.
+
+정직하게 짚어둘 것 두 가지:
+
+  1. **이것은 실시간 시세가 아닙니다.** yfinance 가 주는 값은 지연 시세이며
+     (미국 무료 소스는 통상 15분 지연), 거래에 쓸 수 있는 품질이 아닙니다.
+     그래서 응답에 `is_live` 와 `note` 를 함께 실어 보내고, 화면은 이것을
+     반드시 표시해야 합니다.
+
+  2. **한국은 장중 현재가 소스가 없습니다.** KRX Open API 는 일별 확정
+     데이터만 제공합니다. 없는 것을 있는 척하는 대신 저장된 마지막 종가를
+     `source="stored"` 로 돌려주고, 왜 장중 값이 없는지 설명합니다.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class LiveQuote:
+    price: float | None
+    previous_close: float | None
+    currency: str | None
+    source: str  # "live" | "unavailable"
+    note: str
+
+
+DELAY_NOTE = (
+    "무료 소스의 지연 시세입니다(통상 15분 이상 지연). 참고용이며 체결 가격이 "
+    "아닙니다."
+)
+
+KR_NOTE = (
+    "한국은 무료로 쓸 수 있는 장중 현재가 소스가 없습니다. KRX Open API 는 "
+    "장 마감 후 확정 일별 데이터만 제공하므로, 저장된 마지막 종가를 표시합니다."
+)
+
+
+def fetch_us_quote(ticker: str) -> LiveQuote:
+    """yfinance 지연 시세. 실패는 예외가 아니라 '없음'으로 돌려줍니다.
+
+    현재가 조회가 실패했다고 종목 화면 전체가 깨지면 안 됩니다 -- 차트와 지표는
+    저장된 데이터만으로 완전히 동작하며, 현재가는 부가 정보입니다.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return LiveQuote(None, None, None, "unavailable", "yfinance 가 설치되지 않았습니다.")
+
+    try:
+        info = yf.Ticker(ticker).fast_info
+        price = _pick(info, "last_price", "lastPrice")
+        prev = _pick(info, "previous_close", "previousClose")
+        currency = _pick(info, "currency", default=None, numeric=False)
+    except Exception as exc:  # noqa: BLE001 -- 비공식 스크래핑이라 실패 형태가 다양합니다
+        # 원본 예외를 함께 남기되, 그것만으로는 사용자가 무엇을 해야 할지
+        # 알 수 없으므로 원인 후보를 같이 적습니다. yfinance 는 비공식
+        # 스크래핑이라 차단·규격변경·네트워크 어느 쪽이든 같은 모양으로
+        # 터집니다.
+        return LiveQuote(None, None, None, "unavailable", _failure_note(exc))
+
+    if price is None:
+        return LiveQuote(
+            None, None, None, "unavailable",
+            "시세 소스가 이 종목의 현재가를 주지 않았습니다 (상장폐지·거래정지 "
+            "또는 종목코드 불일치일 수 있습니다).",
+        )
+    return LiveQuote(price, prev, currency, "live", DELAY_NOTE)
+
+
+def fetch_us_quotes(tickers: list[str], *, max_workers: int = 8) -> dict[str, LiveQuote]:
+    """여러 종목의 현재가를 한 번에.
+
+    표(관찰 목록·주목 종목)에 현재가를 붙이려면 종목마다 따로 요청할 수 없습니다.
+    화면 하나에 12개 종목이면 12번의 왕복이 되고, 1분마다 갱신하면 무료 소스가
+    차단으로 응답합니다.
+
+    스레드 풀을 쓰는 이유는 `fetch_us_quote` 한 경로만 유지하기 위해서입니다.
+    일괄 다운로드 API 를 따로 쓰면 단일 조회와 다른 코드로 다른 값을 만들 수
+    있고, 그건 표와 상세 화면의 가격이 어긋나는 형태로 나타납니다.
+
+    **호출자가 종목 수를 제한해야 합니다.** 이 함수는 받은 만큼 전부 요청합니다.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not tickers:
+        return {}
+    unique = list(dict.fromkeys(tickers))
+    with ThreadPoolExecutor(max_workers=min(max_workers, len(unique))) as pool:
+        results = list(pool.map(fetch_us_quote, unique))
+    return dict(zip(unique, results, strict=True))
+
+
+def _failure_note(exc: Exception) -> str:
+    return (
+        "현재가 소스(yfinance)에 접근하지 못했습니다. 네트워크 차단, 요청 한도, "
+        "또는 비공식 API 규격 변경일 수 있습니다. 차트와 지표는 저장된 데이터로 "
+        f"정상 동작합니다. (원인: {type(exc).__name__}: {exc})"
+    )
+
+
+def _pick(info, *keys: str, default=None, numeric: bool = True):
+    """fast_info 는 버전에 따라 dict 이기도 하고 속성 객체이기도 합니다."""
+    for key in keys:
+        value = None
+        try:
+            value = info[key]  # type: ignore[index]
+        except Exception:  # noqa: BLE001
+            value = getattr(info, key, None)
+        if value is None:
+            continue
+        if not numeric:
+            return str(value)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            continue
+    return default

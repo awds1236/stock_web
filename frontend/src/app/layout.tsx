@@ -1,3 +1,4 @@
+import { BackendBar } from "@/components/BackendBar";
 import type { Metadata } from "next";
 import Link from "next/link";
 import "./globals.css";
@@ -21,15 +22,22 @@ export default function RootLayout({
             <div className="tag">지표 해석 · 확률 예측</div>
             <nav>
               <Link href="/">개요</Link>
+              <Link href="/market">시장</Link>
               <Link href="/watchlist">관찰 목록</Link>
               <Link href="/stocks">종목</Link>
               <Link href="/sectors">섹터</Link>
               <Link href="/forecast">예측</Link>
+              <Link href="/ai-logs">AI 기록</Link>
               <Link href="/settings">설정</Link>
               <Link href="/methodology">방법론</Link>
             </nav>
           </aside>
-          <main className="main">{children}</main>
+          <main className="main">
+            {/* 모든 화면 위에 둡니다. "지금 보고 있는 것이 실시간인가"는
+                어느 화면에서든 답이 필요한 질문입니다. */}
+            <BackendBar />
+            {children}
+          </main>
         </div>
       </body>
     </html>

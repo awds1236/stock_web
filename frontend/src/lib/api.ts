@@ -7,6 +7,8 @@
  * 장기 성장률을 음수로 만듭니다.
  */
 
+import { apiBase, BASE_PATH, HAS_SNAPSHOTS, isLive } from "@/lib/backend";
+
 export type Coverage = {
   market: string;
   n_tickers: number;
@@ -155,6 +157,214 @@ export type Credential = {
   editable: boolean;
 };
 
+/**
+ * 대상 단위 분석 리포트.
+ *
+ * `report` 의 내부는 백엔드 `app/reports.py` 가 만드는 dict 그대로입니다.
+ * 필드를 하나하나 복제한 타입을 두지 않는 이유: 백엔드가 지표를 하나 추가할
+ * 때마다 두 곳을 고쳐야 하고, 안 고치면 값이 있는데 화면에 없는 상태가
+ * 됩니다. 화면이 실제로 읽는 부분만 좁게 선언합니다.
+ */
+export type RuleBlock = {
+  matched: string[];
+  score: number;
+  all: string[];
+  caveat: string;
+};
+
+export type StockReport = {
+  market: string;
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  as_of: string;
+  price: {
+    close: number | null;
+    prev_close: number | null;
+    change_1d: number | null;
+    high_52w: number | null;
+    low_52w: number | null;
+  };
+  returns: Record<string, number | null>;
+  indicators: Record<string, number | null>;
+  trend: {
+    stack: string;
+    cross_20_60: CrossState;
+    cross_50_200: CrossState;
+  };
+  liquidity: {
+    value_5d: number | null;
+    value_60d: number | null;
+    surge_ratio: number | null;
+  };
+  levels: Level[];
+  interpretation: Interpretation[];
+  rules: RuleBlock;
+  relative: {
+    sector: string | null;
+    sector_ret_20d: number | null;
+    stock_ret_20d: number | null;
+    excess_vs_sector_20d: number | null;
+    universe_ret_20d: number | null;
+    excess_vs_universe_20d: number | null;
+    rank_60d: { rank: number; of: number } | null;
+  };
+  data_quality: {
+    n_days: number;
+    first_date: string;
+    last_date: string;
+    n_universe: number;
+  };
+  caveats: string[];
+};
+
+export type CrossState = {
+  state: "golden" | "dead" | "insufficient";
+  last_cross: "golden" | "dead" | null;
+  days_since_cross: number | null;
+};
+
+export type StockAnalysis = {
+  report: StockReport;
+  forecast: Forecast | null;
+  forecast_error: string | null;
+};
+
+export type TickerLine = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  close: number | null;
+  ret_5d?: number | null;
+  ret_20d: number | null;
+  ret_60d?: number | null;
+};
+
+export type SectorReport = {
+  market: string;
+  level: string;
+  sector: string;
+  as_of: string;
+  ret_20d: number | null;
+  ret_60d: number | null;
+  relative_strength_60d: number | null;
+  breadth: number | null;
+  n_constituents: number;
+  rank_by_ret_20d: number | null;
+  n_sectors: number;
+  leaders: TickerLine[];
+  laggards: TickerLine[];
+  market_ret_20d: number | null;
+  peer_sectors: SectorRow[];
+  caveats: string[];
+};
+
+export type AttentionItem = {
+  ticker: string;
+  name: string | null;
+  sector: string | null;
+  industry: string | null;
+  close: number | null;
+  ret_20d: number | null;
+  pct_from_52w_high: number | null;
+  score: number;
+  reasons: string[];
+};
+
+export type MarketReport = {
+  market: string;
+  as_of: string;
+  universe: { n_tickers: number; note: string };
+  index_proxy: Record<string, number | null>;
+  internals: {
+    above_sma60_pct: number | null;
+    near_52w_high_pct: number | null;
+    median_vol_20d: number | null;
+    n_evaluated: number;
+  };
+  sectors_top: SectorRow[];
+  sectors_bottom: SectorRow[];
+  level: string;
+  movers_up: TickerLine[];
+  movers_down: TickerLine[];
+  attention: AttentionItem[];
+  rules: string[];
+  caveats: string[];
+};
+
+export type Quote = {
+  market: string;
+  ticker: string;
+  price: number | null;
+  previous_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  currency: string | null;
+  source: "live" | "stored";
+  as_of: string | null;
+  note: string;
+};
+
+export type AILog = {
+  id: string;
+  created_at: string;
+  kind: "stock" | "sector" | "market";
+  market: string;
+  subject: string;
+  subject_label: string | null;
+  model: string | null;
+  content: string | null;
+  facts: Record<string, unknown> | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  duration_ms: number | null;
+  error: string | null;
+};
+
+export type AIStatus = {
+  configured: boolean;
+  model: string;
+  base_url: string;
+  n_logs: number;
+  message: string;
+  disclaimer: string;
+};
+
+export type Preferences = {
+  ai_model: string;
+  ai_base_url: string;
+  ai_max_output_tokens: number;
+  ai_timeout_seconds: number;
+  auto_refresh_enabled: boolean;
+  auto_refresh_interval_minutes: number;
+  auto_refresh_markets: string[];
+  auto_refresh_lookback_days: number;
+};
+
+export type RefreshResult = {
+  market: string;
+  at: string;
+  ok: boolean;
+  rows: number;
+  tickers: number;
+  detail: string;
+};
+
+export type RefreshStatus = {
+  enabled: boolean;
+  interval_minutes: number;
+  markets: string[];
+  lookback_days: number;
+  running: boolean;
+  last_started_at: string | null;
+  last_finished_at: string | null;
+  next_run_at: string | null;
+  results: RefreshResult[];
+  note: string;
+};
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -165,24 +375,28 @@ export class ApiError extends Error {
 }
 
 /**
- * 정적 모드 (GitHub Pages).
+ * 읽기 경로는 **실행 시점의 연결 상태**가 정합니다 (`lib/backend.ts`).
  *
- * Pages 는 정적 파일만 서빙하므로 백엔드가 없습니다. 빌드 시
- * NEXT_PUBLIC_STATIC=1 이면 /api/* 대신 CI 가 생성해 둔 JSON 스냅샷
- * (/data/*.json)을 읽습니다. 쓰기 동작(수집·인증정보)은 정적 배포에서
- * 불가능하며, 되는 척하는 대신 명확한 메시지로 실패합니다.
+ *   백엔드 연결됨 -> /api/* 를 호출. 지금 이 순간의 값.
+ *   연결 안 됨    -> CI 가 만들어 둔 JSON 스냅샷(/data/*.json).
+ *
+ * 빌드 때 둘 중 하나로 못 박지 않는 이유: 배포된 사이트에서 나중에 백엔드를
+ * 붙일 수 있어야 하기 때문입니다. 설정 화면에 주소를 넣는 순간 재빌드 없이
+ * 전 화면이 살아있는 데이터로 바뀝니다.
+ *
+ * 쓰기 동작(수집·인증정보·AI)은 백엔드 없이는 불가능합니다. 되는 척하는 대신
+ * 무엇을 하면 되는지 알려주고 실패합니다.
  */
-export const IS_STATIC = process.env.NEXT_PUBLIC_STATIC === "1";
-const BASE = process.env.NEXT_PUBLIC_BASE_PATH || "";
+const BASE = BASE_PATH;
 export const STATIC_HORIZON = 21;
 
-const STATIC_WRITE_MSG =
-  "정적 배포(GitHub Pages)에서는 이 동작을 실행할 수 없습니다. 데이터는 " +
-  "GitHub Actions 가 스케줄에 따라 자동 갱신하며, 설정·수집은 로컬 실행" +
-  "(백엔드 포함)에서만 가능합니다.";
+const NEEDS_BACKEND_MSG =
+  "이 동작에는 백엔드가 필요합니다. 지금은 CI 가 만들어 둔 스냅샷을 보고 " +
+  "있습니다. 설정 화면에서 백엔드 주소를 연결하면 이 기능이 켜집니다 " +
+  "(재배포 없이 즉시 적용됩니다).";
 
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(path, { cache: "no-store", ...init });
+  const res = await fetch(`${apiBase()}${path}`, { cache: "no-store", ...init });
   if (!res.ok) {
     let detail = `HTTP ${res.status}`;
     try {
@@ -213,34 +427,67 @@ async function staticFile<T>(name: string): Promise<T> {
   return res.json();
 }
 
-function staticWriteBlocked(): never {
-  throw new ApiError(STATIC_WRITE_MSG, 501);
+function needsBackend(): never {
+  throw new ApiError(NEEDS_BACKEND_MSG, 501);
+}
+
+/** 스냅샷이 아예 없는 배포에서 읽기를 시도했을 때. */
+function noSource(what: string): never {
+  throw new ApiError(
+    `${what} 를 가져올 곳이 없습니다. 백엔드가 실행 중인지 확인하거나, 설정 ` +
+      `화면에서 백엔드 주소를 연결하십시오.`,
+    503,
+  );
+}
+
+/**
+ * 읽기 경로 선택기.
+ *
+ * 백엔드가 살아 있으면 항상 그쪽입니다 -- 지금 이 순간의 값이기 때문입니다.
+ * 없으면 스냅샷으로 물러나고, 스냅샷조차 없으면 이유를 말하고 실패합니다.
+ */
+function read<T>(live: () => Promise<T>, snapshot: () => Promise<T>, what: string) {
+  if (isLive()) return live();
+  if (HAS_SNAPSHOTS) return snapshot();
+  return noSource(what);
+}
+
+/** 쓰기 경로: 백엔드 없이는 불가능합니다. */
+function write<T>(live: () => Promise<T>): Promise<T> {
+  return isLive() ? live() : needsBackend();
 }
 
 export const api = {
   coverage: () =>
-    IS_STATIC
-      ? staticFile<Coverage[]>("coverage.json")
-      : req<Coverage[]>("/api/coverage"),
+    read<Coverage[]>(
+      () => req("/api/coverage"),
+      () => staticFile("coverage.json"),
+      "데이터 현황",
+    ),
   universe: (market: string) =>
-    IS_STATIC
-      ? staticFile<UniverseItem[]>(`universe-${market}.json`)
-      : req<UniverseItem[]>(`/api/universe/${market}`),
+    read<UniverseItem[]>(
+      () => req(`/api/universe/${market}`),
+      () => staticFile(`universe-${market}.json`),
+      `${market} 종목 목록`,
+    ),
   stock: (market: string, ticker: string) =>
-    IS_STATIC
-      ? staticFile<StockDetail>(`stocks-${market}-${ticker}.json`)
-      : req<StockDetail>(`/api/stocks/${market}/${ticker}`),
+    read<StockDetail>(
+      () => req(`/api/stocks/${market}/${ticker}`),
+      () => staticFile(`stocks-${market}-${ticker}.json`),
+      `${ticker} 시세`,
+    ),
   forecast: (market: string, target: string, horizon: number) => {
-    if (!IS_STATIC)
+    if (isLive())
       return req<Forecast>(
         `/api/forecast/${market}?target=${target}&horizon_days=${horizon}`,
       );
+    if (!HAS_SNAPSHOTS) return noSource("예측");
     // 스냅샷에는 21일 예측만 포함됩니다. 없는 조합을 404 로 흘리는 대신
     // 이유를 말합니다.
     if (horizon !== STATIC_HORIZON)
       throw new ApiError(
-        `정적 스냅샷에는 ${STATIC_HORIZON}일 예측만 포함됩니다. 다른 기간은 ` +
-          "로컬 실행에서 계산할 수 있습니다.",
+        `스냅샷에는 ${STATIC_HORIZON}일 예측만 포함됩니다. 다른 기간은 백엔드를 ` +
+          "연결하면 계산할 수 있습니다.",
         404,
       );
     return staticFile<Forecast>(
@@ -248,57 +495,158 @@ export const api = {
     );
   },
   sectors: (market: string, level: "sector" | "industry" = "sector") =>
-    IS_STATIC
-      ? staticFile<SectorRow[]>(
+    read<SectorRow[]>(
+      () => req(`/api/sectors/${market}?level=${level}`),
+      () =>
+        staticFile(
           level === "industry"
             ? `sectors-${market}-industry.json`
             : `sectors-${market}.json`,
-        )
-      : req<SectorRow[]>(`/api/sectors/${market}?level=${level}`),
-  watchlist: (market: string) =>
-    IS_STATIC
-      ? staticFile<Watchlist>(`watchlist-${market}.json`)
-      : req<Watchlist>(`/api/watchlist/${market}`),
-  search: async (market: string, q: string, limit = 20) =>
-    IS_STATIC
-      ? searchLocally(await api.universe(market), q, limit)
-      : req<SearchHit[]>(
-          `/api/search/${market}?q=${encodeURIComponent(q)}&limit=${limit}`,
         ),
+      "섹터 현황",
+    ),
+  watchlist: (market: string) =>
+    read<Watchlist>(
+      () => req(`/api/watchlist/${market}`),
+      () => staticFile(`watchlist-${market}.json`),
+      "관찰 목록",
+    ),
+  search: async (market: string, q: string, limit = 20) =>
+    isLive()
+      ? req<SearchHit[]>(
+          `/api/search/${market}?q=${encodeURIComponent(q)}&limit=${limit}`,
+        )
+      : searchLocally(await api.universe(market), q, limit),
   buildInfo: () =>
     staticFile<{ generated_at: string; note: string }>("build-info.json"),
   credentials: () =>
-    IS_STATIC
-      ? staticWriteBlocked()
-      : req<{ credentials: Credential[]; warning: string }>(
-          "/api/settings/credentials",
-        ),
+    write<{ credentials: Credential[]; warning: string }>(() =>
+      req("/api/settings/credentials"),
+    ),
   setCredential: (name: string, value: string) =>
-    IS_STATIC
-      ? staticWriteBlocked()
-      : req<Credential>(`/api/settings/credentials/${name}`, {
+    write<Credential>(() =>
+      req(`/api/settings/credentials/${name}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      }),
+    ),
+  deleteCredential: (name: string) =>
+    write<Credential>(() =>
+      req(`/api/settings/credentials/${name}`, { method: "DELETE" }),
+    ),
+  ingest: (market: string, years = 10) =>
+    write<{
+      market: string;
+      rows: number;
+      tickers: number;
+      start: string | null;
+      end: string | null;
+      warnings: string[];
+    }>(() => req(`/api/ingest/${market}?years=${years}`, { method: "POST" })),
+
+  // ── 대상 단위 분석 ──────────────────────────────────────────────────
+  // 스냅샷 배포에서도 동작합니다. CI 가 같은 엔드포인트의 응답을 파일로
+  // 고정해두기 때문입니다 -- 두 배포에서 다른 앱이 되지 않게 하는 것이
+  // 이 프로젝트의 규칙입니다. 백엔드가 붙어 있으면 자동으로 그쪽을 씁니다.
+  analyzeStock: (market: string, ticker: string, includeForecast = false) =>
+    read<StockAnalysis>(
+      () =>
+        req(
+          `/api/analyze/stock/${market}/${ticker}?include_forecast=${includeForecast}`,
+        ),
+      () => staticFile(`analysis-stock-${market}-${ticker}.json`),
+      `${ticker} 분석`,
+    ),
+  analyzeSector: (market: string, sector: string, level = "industry") =>
+    read<{ report: SectorReport }>(
+      () =>
+        req(
+          `/api/analyze/sector/${market}?sector=${encodeURIComponent(sector)}` +
+            `&level=${level}`,
+        ),
+      () => staticFile(`analysis-sector-${market}-${sectorSlug(sector)}.json`),
+      `${sector} 분석`,
+    ),
+  analyzeMarket: (market: string) =>
+    read<{ report: MarketReport }>(
+      () => req(`/api/analyze/market/${market}`),
+      () => staticFile(`analysis-market-${market}.json`),
+      "시장 분석",
+    ),
+
+  // ── 현재가 ──────────────────────────────────────────────────────────
+  // 백엔드가 있으면 백엔드가, 없으면 브라우저가 직접 시세 소스를 호출합니다
+  // (lib/liveQuote.ts). 여기서는 백엔드 경로만 다룹니다.
+  quote: (market: string, ticker: string) =>
+    write<Quote>(() => req(`/api/quote/${market}/${ticker}`)),
+  quotes: (market: string, tickers: string[]) =>
+    write<Quote[]>(() =>
+      req(`/api/quotes/${market}?tickers=${tickers.map(encodeURIComponent).join(",")}`),
+    ),
+
+  // ── AI 분석 ─────────────────────────────────────────────────────────
+  aiStatus: () => write<AIStatus>(() => req("/api/ai/status")),
+  aiAnalyzeStock: (market: string, ticker: string) =>
+    write<AILog>(() =>
+      req(`/api/ai/analyze/stock/${market}/${ticker}`, { method: "POST" }),
+    ),
+  aiAnalyzeSector: (market: string, sector: string, level = "industry") =>
+    write<AILog>(() =>
+      req(
+        `/api/ai/analyze/sector/${market}?sector=${encodeURIComponent(sector)}` +
+          `&level=${level}`,
+        { method: "POST" },
+      ),
+    ),
+  aiAnalyzeMarket: (market: string) =>
+    write<AILog>(() =>
+      req(`/api/ai/analyze/market/${market}`, { method: "POST" }),
+    ),
+  aiLogs: (params: { kind?: string; market?: string; subject?: string } = {}) =>
+    write<AILog[]>(() => {
+      const q = new URLSearchParams();
+      for (const [k, v] of Object.entries(params)) if (v) q.set(k, v);
+      return req(`/api/ai/logs?${q.toString()}`);
+    }),
+  aiLog: (id: string) => write<AILog>(() => req(`/api/ai/logs/${id}`)),
+  deleteAiLog: (id: string) =>
+    write<{ deleted: string }>(() =>
+      req(`/api/ai/logs/${id}`, { method: "DELETE" }),
+    ),
+
+  // ── 설정·자동 갱신 ──────────────────────────────────────────────────
+  preferences: () =>
+    write<{ preferences: Preferences; env_controlled: string[]; note: string }>(
+      () => req("/api/settings/preferences"),
+    ),
+  savePreferences: (patch: Partial<Preferences>) =>
+    write<{ preferences: Preferences; env_controlled: string[]; note: string }>(
+      () =>
+        req("/api/settings/preferences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ value }),
+          body: JSON.stringify(patch),
         }),
-  deleteCredential: (name: string) =>
-    IS_STATIC
-      ? staticWriteBlocked()
-      : req<Credential>(`/api/settings/credentials/${name}`, {
-          method: "DELETE",
-        }),
-  ingest: (market: string, years = 10) =>
-    IS_STATIC
-      ? staticWriteBlocked()
-      : req<{
-          market: string;
-          rows: number;
-          tickers: number;
-          start: string | null;
-          end: string | null;
-          warnings: string[];
-        }>(`/api/ingest/${market}?years=${years}`, { method: "POST" }),
+    ),
+  refreshStatus: () => write<RefreshStatus>(() => req("/api/refresh/status")),
+  runRefresh: (market?: string) =>
+    write<RefreshResult[]>(() =>
+      req(`/api/refresh/run${market ? `?market=${market}` : ""}`, {
+        method: "POST",
+      }),
+    ),
 };
+
+/**
+ * 업종명 → 정적 스냅샷 파일명.
+ *
+ * 백엔드 `scripts/export_static.py::_slug` 와 **같은 규칙**이어야 합니다.
+ * 갈리면 정적 배포에서만 404 가 나고 로컬에서는 재현되지 않습니다.
+ */
+export function sectorSlug(name: string): string {
+  return encodeURIComponent(name);
+}
 
 /**
  * 정적 배포용 클라이언트 검색.

@@ -34,7 +34,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from app.config import settings
 
-CredentialName = Literal["KRX_AUTH_KEY", "SEC_USER_AGENT"]
+CredentialName = Literal["KRX_AUTH_KEY", "SEC_USER_AGENT", "OPENAI_API_KEY"]
 
 # 앱이 관리하는 인증정보 목록. 여기 없는 이름은 저장을 거부합니다 -- 임의의
 # 키/값 저장소가 되면 무엇이 비밀인지 추적할 수 없게 됩니다.
@@ -55,6 +55,15 @@ MANAGED: dict[str, dict[str, str]] = {
             "없으면 요청을 차단합니다."
         ),
         "signup_url": "https://www.sec.gov/os/webmaster-faq#developers",
+    },
+    "OPENAI_API_KEY": {
+        "label": "OpenAI API 키 (AI 분석)",
+        "help": (
+            "AI 서술 분석(종목·섹터·시장)에만 쓰입니다. 없어도 시세·지표·예측은 "
+            "전부 동작하며, AI 분석 버튼만 비활성화됩니다. 호출할 때마다 "
+            "사용자의 계정에 과금되므로 분석은 버튼을 눌렀을 때만 실행됩니다."
+        ),
+        "signup_url": "https://platform.openai.com/api-keys",
     },
 }
 
@@ -240,6 +249,17 @@ def validate(name: str, value: str) -> None:
             raise CredentialError("KRX 인증키가 너무 짧습니다. 값을 다시 확인하십시오.")
         if any(c.isspace() for c in value):
             raise CredentialError("KRX 인증키에 공백이 포함되어 있습니다.")
+    elif name == "OPENAI_API_KEY":
+        # 접두사(`sk-`)는 검사하지 않습니다. 사설 게이트웨이나 호환 엔드포인트를
+        # 쓰면 키 형식이 다르고, 형식 검사로 막으면 정당한 설정이 거부됩니다.
+        # 실제 유효성은 첫 호출에서 공급자가 판정하며 그 오류를 그대로 보여줍니다.
+        if len(value) < 20:
+            raise CredentialError("API 키가 너무 짧습니다. 값을 다시 확인하십시오.")
+        if any(c.isspace() for c in value):
+            raise CredentialError(
+                "API 키에 공백이나 줄바꿈이 섞여 있습니다. 복사할 때 따라온 "
+                "공백을 제거하십시오 -- 인증 실패의 가장 흔한 원인입니다."
+            )
 
 
 # 애플리케이션 전역 저장소

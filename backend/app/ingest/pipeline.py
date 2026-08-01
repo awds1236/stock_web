@@ -105,12 +105,22 @@ def ingest_us_prices(
     tickers: list[str] | None = None,
     *,
     years: int = 10,
+    since: date | None = None,
+    with_classification: bool = True,
     store: Store | None = None,
 ) -> IngestResult:
     """미국 시세 수집 (yfinance, 인증키 불필요).
 
     섹터 정보도 함께 채웁니다 -- 섹터 단위 예측이 이 앱의 주요 기능이므로
     시세만 있고 섹터가 비면 절반만 쓸 수 있게 됩니다.
+
+    Args:
+        since: 이 날짜부터만 받아옵니다(증분 갱신용). 자동 갱신이 매번 10년치를
+            내려받으면 요청량이 수백 배가 되고, Yahoo 가 조용히 차단합니다.
+        with_classification: 섹터·업종 재조회 여부. 종목당 별도 요청이라 가장
+            느린 구간인데, 분류는 거의 바뀌지 않으므로 증분 갱신에서는 끕니다.
+            **기존 저장값이 있으면 그대로 유지합니다** -- 끈 채로 덮어쓰면 이미
+            채워둔 섹터가 NULL 로 지워져 섹터 분석이 통째로 비게 됩니다.
     """
     from app.providers.yfinance_provider import (
         SURVIVORSHIP_WARNING,
@@ -120,17 +130,22 @@ def ingest_us_prices(
     store = store or get_store()
     tickers = tickers or DEFAULT_US_UNIVERSE
     end = date.today()
-    start = end - timedelta(days=int(365.25 * years))
+    start = since or (end - timedelta(days=int(365.25 * years)))
 
     provider = YFinancePriceProvider()
-    df = provider.fetch_history(tickers, start, end)
+    # yfinance 의 end 는 배타적이라 오늘 종가가 빠집니다. 하루 더 요청합니다.
+    df = provider.fetch_history(tickers, start, end + timedelta(days=1))
     warnings = [SURVIVORSHIP_WARNING]
 
     if df.empty:
         return IngestResult("US", "prices", 0, 0, None, None,
                             [*warnings, "수집된 데이터가 없습니다."])
 
-    classification = _fetch_us_classification(tickers)
+    classification = (
+        _fetch_us_classification(tickers)
+        if with_classification
+        else _stored_us_classification(store, tickers)
+    )
     df["sector"] = df["ticker"].map({t: c[0] for t, c in classification.items()})
     df["industry"] = df["ticker"].map({t: c[1] for t, c in classification.items()})
     if df["sector"].isna().any():
@@ -153,6 +168,29 @@ def ingest_us_prices(
         end=df["date"].max(),
         warnings=warnings,
     )
+
+
+def _stored_us_classification(
+    store: Store, tickers: list[str]
+) -> dict[str, tuple[str | None, str | None]]:
+    """이미 저장된 섹터·업종을 그대로 재사용 (증분 갱신용).
+
+    분류 조회는 종목당 별도 HTTP 요청이라 이 파이프라인에서 가장 느립니다.
+    분류가 바뀌는 일은 드물기 때문에, 증분 갱신에서는 다시 묻지 않고 DB 에
+    있는 값을 다시 씁니다.
+    """
+    universe = store.universe("US")
+    if universe.empty:
+        return {}
+    wanted = set(tickers)
+    return {
+        str(r["ticker"]): (
+            str(r["sector"]) if pd.notna(r["sector"]) else None,
+            str(r["industry"]) if pd.notna(r.get("industry")) else None,
+        )
+        for _, r in universe.iterrows()
+        if str(r["ticker"]) in wanted
+    }
 
 
 def _fetch_us_classification(tickers: list[str]) -> dict[str, tuple[str | None, str | None]]:

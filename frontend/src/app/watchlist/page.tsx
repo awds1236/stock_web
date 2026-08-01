@@ -1,8 +1,15 @@
 "use client";
 
+import { Freshness, QuoteCell } from "@/components/Freshness";
 import { api, pct, type Watchlist } from "@/lib/api";
 import { industryLabel, sectorLabel } from "@/lib/sectorNames";
-import { useEffect, useState } from "react";
+import { usePolling } from "@/lib/useBackend";
+import { useQuotes } from "@/lib/useQuotes";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+/** 규칙 판정은 일별 데이터에서 나오므로 자주 다시 계산할 이유가 없습니다.
+    그래도 두는 이유: 백엔드에서 수집이 돌면 열어둔 탭이 알아채야 합니다. */
+const WATCH_POLL_MS = 300_000;
 
 /**
  * 자동 관찰 목록.
@@ -16,17 +23,42 @@ export default function WatchlistPage() {
   const [data, setData] = useState<Watchlist | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
+
+  const load = useCallback(
+    async (clear = true) => {
+      setLoading(true);
+      if (clear) setData(null);
+      setError(null);
+      try {
+        setData(await api.watchlist(market));
+        setUpdatedAt(Date.now());
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+      } finally {
+        setLoading(false);
+      }
+    },
+    [market],
+  );
 
   useEffect(() => {
-    setLoading(true);
-    setData(null);
-    setError(null);
-    api
-      .watchlist(market)
-      .then(setData)
-      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
-      .finally(() => setLoading(false));
-  }, [market]);
+    load();
+  }, [load]);
+
+  // 자동 갱신은 화면을 비우지 않습니다 -- 읽는 도중에 목록이 사라지면 안 됩니다.
+  usePolling(() => load(false), WATCH_POLL_MS, [load]);
+
+  // 후보 종목의 현재가. 이 목록을 보는 이유가 "지금 어떤지"입니다.
+  const tickers = useMemo(
+    () => (data?.candidates ?? []).map((c) => c.ticker),
+    [data],
+  );
+  const fallbackCloses = useMemo(
+    () => new Map((data?.candidates ?? []).map((c) => [c.ticker, c.close])),
+    [data],
+  );
+  const quotes = useQuotes(market, tickers, { fallbackCloses });
 
   return (
     <>
@@ -42,12 +74,16 @@ export default function WatchlistPage() {
           <option value="US">미국</option>
           <option value="KR">한국</option>
         </select>
-        {data && (
-          <span className="muted" style={{ marginLeft: 10, fontSize: 12 }}>
-            기준일 {data.as_of}
-          </span>
-        )}
       </div>
+
+      <Freshness
+        updatedAt={updatedAt}
+        onRefresh={() => load(false)}
+        loading={loading}
+        intervalMs={WATCH_POLL_MS}
+        asOf={data?.as_of}
+        extra={<span>· 현재가는 1분마다 따로 갱신</span>}
+      />
 
       {error && (
         <div className="banner warn">
@@ -155,7 +191,10 @@ export default function WatchlistPage() {
                       <tr>
                         <td className="muted">현재가</td>
                         <td className="num">
-                          {c.close === null ? "—" : fmtPrice(c.close)}
+                          <QuoteCell
+                            quote={quotes.quotes.get(c.ticker)}
+                            fallback={c.close}
+                          />
                         </td>
                       </tr>
                       <tr>

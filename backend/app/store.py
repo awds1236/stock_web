@@ -246,6 +246,20 @@ class Store:
                 [market],
             ).fetchdf()
 
+    def stamp(self, market: str) -> tuple[str, int]:
+        """이 시장 데이터의 지문 (마지막 일자, 행 수).
+
+        캐시 무효화 기준으로 씁니다. 시간 기반 TTL 대신 이걸 쓰는 이유:
+        자동 수집이 새 데이터를 넣었는데 옛 계산이 남아 있으면, 화면의 시세와
+        분석이 서로 다른 날짜를 가리킵니다. 데이터가 바뀌었는지를 직접 보는
+        편이 정확합니다.
+        """
+        with self.cursor() as con:
+            row = con.execute(
+                "SELECT max(date), count(*) FROM prices WHERE market = ?", [market]
+            ).fetchone()
+        return (str(row[0]) if row else "", int(row[1] or 0) if row else 0)
+
     def coverage(self) -> pd.DataFrame:
         """시장별 데이터 보유 현황. 프론트엔드가 '데이터 없음'을 안내할 때 씁니다."""
         with self.cursor() as con:

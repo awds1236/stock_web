@@ -180,7 +180,7 @@ class TestSettingsApi:
     def test_list_shows_unconfigured_initially(self, client):
         body = client.get("/api/settings/credentials").json()
         names = {c["name"] for c in body["credentials"]}
-        assert names == {"KRX_AUTH_KEY", "SEC_USER_AGENT"}
+        assert names == {"KRX_AUTH_KEY", "SEC_USER_AGENT", "OPENAI_API_KEY"}
         assert all(c["configured"] is False for c in body["credentials"])
         assert body["warning"]  # 배포 경고가 응답에 포함되어야 합니다
 
