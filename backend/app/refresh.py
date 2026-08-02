@@ -96,7 +96,7 @@ def refresh_market(market: str, *, lookback_days: int = 7) -> MarketRefresh:
                 with_classification=since is None,
             )
         else:
-            res = ingest_kr_prices(days=max(lookback_days, 5))
+            res = ingest_kr_prices(days=max(lookback_days, 5), max_days_per_run=30)
     except ProviderError as exc:
         return MarketRefresh(market, now, False, detail=str(exc))
     except StoreLocked as exc:

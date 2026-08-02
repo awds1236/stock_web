@@ -17,6 +17,8 @@ export type Coverage = {
   n_rows: number;
   ready: boolean;
   needs_credential: string | null;
+  n_days: number;
+  history_note: string | null;
 };
 
 export type UniverseItem = {

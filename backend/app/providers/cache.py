@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -51,12 +52,18 @@ class DiskCache:
 
 
 class CallBudget:
-    """자정 기준으로 리셋되는 일일 호출 카운터."""
+    """자정 기준으로 리셋되는 일일 호출 카운터.
+
+    **스레드 안전합니다.** 히스토리 백필은 일자별 요청을 병렬로 보내는데,
+    읽고-더하고-쓰는 이 카운터를 락 없이 두면 갱신이 서로를 덮어써 실제보다
+    적게 세어집니다. 그러면 한도를 넘긴 줄 모른 채 계속 호출하게 됩니다.
+    """
 
     def __init__(self, limit: int | None = None, state_path: Path | None = None) -> None:
         self.limit = limit if limit is not None else settings.krx_daily_call_budget
         self.state_path = state_path or (settings.data_dir / "call_budget.json")
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.Lock()
 
     def _load(self) -> tuple[str, int]:
         if not self.state_path.exists():
@@ -69,20 +76,21 @@ class CallBudget:
 
     def consume(self, n: int = 1) -> int:
         """호출 n회를 소비하고 남은 예산을 반환. 초과 시 예외."""
-        today = date.today().isoformat()
-        day, count = self._load()
-        if day != today:
-            day, count = today, 0
-        if count + n > self.limit:
-            raise CallBudgetExceeded(
-                f"KRX 일일 호출 한도 초과: {count}+{n} > {self.limit}. "
-                f"내일 재시도하거나 캐시를 활용하십시오."
+        with self._lock:
+            today = date.today().isoformat()
+            day, count = self._load()
+            if day != today:
+                day, count = today, 0
+            if count + n > self.limit:
+                raise CallBudgetExceeded(
+                    f"KRX 일일 호출 한도 초과: {count}+{n} > {self.limit}. "
+                    f"내일 재시도하거나 캐시를 활용하십시오."
+                )
+            count += n
+            self.state_path.write_text(
+                json.dumps({"day": day, "count": count, "updated": datetime.now().isoformat()})
             )
-        count += n
-        self.state_path.write_text(
-            json.dumps({"day": day, "count": count, "updated": datetime.now().isoformat()})
-        )
-        return self.limit - count
+            return self.limit - count
 
     @property
     def remaining(self) -> int:
