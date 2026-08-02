@@ -42,6 +42,16 @@ class CoverageOut(BaseModel):
     n_rows: int
     ready: bool
     needs_credential: str | None
+    # 히스토리 깊이. 행 수만으로는 알 수 없습니다 -- 종목이 많고 기간이 짧아도
+    # 행은 많아집니다. 실제로 한국 데이터가 19거래일뿐인데 화면에는 수천 행으로
+    # 보여, 왜 장기 지표가 비는지 알 수 없었습니다.
+    n_days: int
+    history_note: str | None
+
+
+# 화면 기능별로 필요한 거래일 수 (실측 기준).
+DAYS_FOR_LONG_INDICATORS = 252  # 52주 고점·200일선
+DAYS_FOR_FORECAST = 900  # 특성 워밍업 252 + 학습 504 + 검증 126 + 예측구간
 
 
 class UniverseItem(BaseModel):
@@ -151,6 +161,7 @@ def coverage() -> list[CoverageOut]:
     for code in MARKETS:
         row = have.get(code)
         has_rows = row is not None and int(row["n_rows"]) > 0
+        n_days = _distinct_days(code) if has_rows else 0
         out.append(
             CoverageOut(
                 market=code,
@@ -162,9 +173,46 @@ def coverage() -> list[CoverageOut]:
                 needs_credential=(
                     "KRX_AUTH_KEY" if (code == "KR" and not has_rows) else None
                 ),
+                n_days=n_days,
+                history_note=_history_note(code, n_days) if has_rows else None,
             )
         )
     return out
+
+
+def _distinct_days(market: str) -> int:
+    with get_store().cursor() as con:
+        row = con.execute(
+            "SELECT count(DISTINCT date) FROM prices WHERE market = ?", [market]
+        ).fetchone()
+    return int(row[0] or 0)
+
+
+def _history_note(market: str, n_days: int) -> str | None:
+    """히스토리가 짧아 못 쓰는 기능을 **미리** 알려줍니다.
+
+    이걸 표시하지 않으면 사용자는 빈 화면만 보고 앱이 고장난 줄 압니다.
+    실제로 한국 데이터가 19거래일뿐이던 배포에서 시장·예측 화면이 통째로
+    비어 있었는데, 화면 어디에도 이유가 없었습니다.
+    """
+    if n_days >= DAYS_FOR_FORECAST:
+        return None
+    kr_hint = (
+        " KRX 는 하루치씩만 제공하므로 히스토리는 수집을 실행할 때마다 과거로 "
+        "넓어집니다."
+        if market == "KR"
+        else ""
+    )
+    if n_days < DAYS_FOR_LONG_INDICATORS:
+        return (
+            f"{n_days}거래일뿐입니다. 52주 고점·200일선 같은 장기 지표에는 "
+            f"{DAYS_FOR_LONG_INDICATORS}일, 예측에는 {DAYS_FOR_FORECAST}일이 "
+            f"필요하므로 해당 화면은 비어 보입니다.{kr_hint}"
+        )
+    return (
+        f"{n_days}거래일입니다. 지표는 계산되지만 예측에는 "
+        f"{DAYS_FOR_FORECAST}일이 필요합니다.{kr_hint}"
+    )
 
 
 @router.get("/universe/{market}", response_model=list[UniverseItem])
@@ -1018,7 +1066,7 @@ def ingest(
         res = (
             ingest_us_prices(years=years)
             if market == "US"
-            else ingest_kr_prices(limit=limit)
+            else ingest_kr_prices(years=years, limit=limit)
         )
     except ProviderError as exc:
         raise HTTPException(409, str(exc)) from exc

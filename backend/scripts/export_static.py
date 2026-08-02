@@ -77,7 +77,7 @@ def main() -> int:
         # 한국은 KRX 키가 있을 때만. Actions 에서는 repo secret 으로 주입됩니다.
         if os.getenv("KRX_AUTH_KEY", "").strip():
             try:
-                kr = ingest_kr_prices()
+                kr = ingest_kr_prices(years=args.years)
                 print(f"KR 수집: {kr.rows}행 / {kr.tickers}종목")
                 # 실패 원인을 반드시 로그에 남깁니다. 실제 배포에서 'KR 0행'만
                 # 찍히고 이유가 보이지 않아 진단이 불가능했던 사례가 있습니다 --

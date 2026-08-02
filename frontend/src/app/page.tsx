@@ -175,6 +175,10 @@ export default function Home() {
                   <td className="num">{c.n_tickers.toLocaleString()}</td>
                 </tr>
                 <tr>
+                  <td className="muted">거래일 수</td>
+                  <td className="num">{c.n_days.toLocaleString()}</td>
+                </tr>
+                <tr>
                   <td className="muted">데이터 행</td>
                   <td className="num">{c.n_rows.toLocaleString()}</td>
                 </tr>
@@ -188,6 +192,15 @@ export default function Home() {
                 </tr>
               </tbody>
             </table>
+
+            {/* 히스토리가 짧아 못 쓰는 기능이 있으면 **미리** 말합니다.
+                빈 화면만 보면 사용자는 앱이 고장난 줄 압니다. */}
+            {c.history_note && (
+              <div className="banner warn" style={{ marginTop: 10 }}>
+                <strong>히스토리가 짧습니다</strong>
+                {c.history_note}
+              </div>
+            )}
 
             {!live ? (
               <div className="caveat" style={{ marginTop: 12 }}>
