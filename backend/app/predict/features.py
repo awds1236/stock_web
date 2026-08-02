@@ -77,6 +77,10 @@ def build_features(
         if col not in df.columns:
             df[col] = np.nan
 
+    # 라벨과 같은 이유로 여기서도 0원을 결측 처리합니다. 특성에 들어간 inf 는
+    # 라벨만큼 요란하게 죽지 않고 **조용히 순위를 왜곡**하기 때문에 더 나쁩니다.
+    df["close"] = _positive(df["close"])
+
     g = df.groupby("ticker", sort=False, group_keys=False)
 
     # ── 모멘텀 ──────────────────────────────────────────────────────────
@@ -149,22 +153,46 @@ def make_labels(
     df = panel.copy()
     df["date"] = pd.to_datetime(df["date"])
     df = df.sort_values(["ticker", "date"]).reset_index(drop=True)
+
+    # **0원은 가격이 아니라 '거래 없음'입니다** (거래정지·정리매매·상장 전).
+    #
+    # KRX 는 그런 날 0 을 내려줍니다. 그대로 나누면 수익률이 무한대가 되고,
+    # `dropna` 는 inf 를 걸러내지 못해 학습 단계에서 통째로 터집니다 -- 실제로
+    # 한국 데이터가 들어오자 배포가 이 예외로 실패했습니다:
+    #
+    #     ValueError: Input y contains infinity or a value too large for float64
+    #
+    # 미국(yfinance)은 0 을 주지 않아 이 경로가 드러나지 않았습니다.
+    df["_px"] = _positive(df[price_col])
+    df["_cl"] = _positive(df["close"])
     g = df.groupby("ticker", sort=False, group_keys=False)
 
-    entry = g[price_col].transform(lambda s: s.shift(-1))
-    exit_ = g[price_col].transform(lambda s: s.shift(-1 - horizon_days))
+    entry = g["_px"].transform(lambda s: s.shift(-1))
+    exit_ = g["_px"].transform(lambda s: s.shift(-1 - horizon_days))
     df["fwd_return"] = exit_ / entry - 1
     df["fwd_up"] = (df["fwd_return"] > 0).astype(float).where(df["fwd_return"].notna())
 
     # 미래 실현변동성. 문헌상 수익률 방향보다 훨씬 예측 가능한 대상이므로
     # 이 앱은 이것을 1급 예측 대상으로 다룹니다.
-    daily_ret = g["close"].transform(lambda s: s.pct_change())
-    df["_dr"] = daily_ret
-    df["fwd_vol"] = g.apply(
-        lambda x: x["_dr"].shift(-1).rolling(horizon_days).std().shift(-horizon_days + 1)
-        * np.sqrt(252)
-    )
-    return df.drop(columns=["_dr"])
+    df["_dr"] = g["_cl"].transform(lambda s: s.pct_change())
+    # `groupby.apply` 가 아니라 `transform` 을 쓰는 이유: 그룹이 하나뿐일 때
+    # apply 는 Series 가 아니라 DataFrame 을 돌려줘 대입이 터집니다
+    # ("Cannot set a DataFrame with multiple columns to the single column").
+    # 종목이 하나인 패널은 드물지만, 그때만 죽는 코드는 찾기 어렵습니다.
+    df["fwd_vol"] = g["_dr"].transform(
+        lambda s: s.shift(-1).rolling(horizon_days).std().shift(-horizon_days + 1)
+    ) * np.sqrt(252)
+    # 위 마스킹으로 대부분 막히지만, 라벨에 inf 를 절대 남기지 않는 것을
+    # 마지막으로 한 번 더 보장합니다. 라벨의 inf 는 조용히 넘어가지 않고
+    # 학습을 죽입니다.
+    for col in ("fwd_return", "fwd_vol"):
+        df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+    return df.drop(columns=["_dr", "_px", "_cl"])
+
+
+def _positive(s: pd.Series) -> pd.Series:
+    """0 이하와 무한대를 결측으로. 가격·수량에 쓰는 공통 가드입니다."""
+    return s.where((s > 0) & np.isfinite(s))
 
 
 def cross_sectional_rank(
