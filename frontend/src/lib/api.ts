@@ -654,9 +654,22 @@ export const api = {
  *
  * 백엔드 `scripts/export_static.py::_slug` 와 **같은 규칙**이어야 합니다.
  * 갈리면 정적 배포에서만 404 가 나고 로컬에서는 재현되지 않습니다.
+ *
+ * 여기서 `encodeURIComponent` 를 쓰면 안 됩니다. 파일명이
+ * `%EA%B1%B4%EC%84%A4` 가 되는데, 그 URL 을 요청하면 웹서버가 디코딩해서
+ * '건설' 파일을 찾으므로 항상 404 입니다 -- 실제로 이것 때문에 정적
+ * 배포에서 모든 업종의 분석 버튼이 실패했습니다(한국은 한글, 미국은 공백).
+ *
+ * UTF-8 바이트 단위로 ASCII 만 남기면 URL 디코딩이 항등이 되어 안전합니다.
  */
 export function sectorSlug(name: string): string {
-  return encodeURIComponent(name);
+  const bytes = new TextEncoder().encode(name);
+  let out = "";
+  for (const b of bytes) {
+    const ch = String.fromCharCode(b);
+    out += /[A-Za-z0-9._-]/.test(ch) ? ch : `_${b.toString(16).padStart(2, "0")}`;
+  }
+  return out;
 }
 
 /**

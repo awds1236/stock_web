@@ -137,6 +137,19 @@ def walk_forward_predict(
     data["date"] = pd.to_datetime(data["date"])
     data = data.sort_values("date")
     data = data.dropna(subset=[*feature_cols, label_col])
+
+    # **inf 는 dropna 가 걸러내지 못합니다.**
+    #
+    # 이 한 줄이 없어서 배포가 통째로 실패한 적이 있습니다. 0원(거래정지)으로
+    # 나눈 수익률이 무한대가 되어 그대로 sklearn 까지 갔고, 학습이 예외로
+    # 죽으면서 스냅샷 생성 → 배포가 전부 중단됐습니다.
+    #
+    # 원인은 특성·라벨 쪽에서 고쳤지만, 여기서도 막습니다. 앞으로 어떤 지표가
+    # 추가되든 유한하지 않은 값이 모형에 도달하면 안 되고, 그 판단을 지표마다
+    # 개별로 기억하게 만들면 언젠가 다시 빠뜨립니다.
+    if len(data):
+        numeric = data[[*feature_cols, label_col]].to_numpy(dtype=float)
+        data = data[np.isfinite(numeric).all(axis=1)]
     if data.empty:
         return WalkForwardResult(_empty_predictions(), [], cfg, feature_cols)
 

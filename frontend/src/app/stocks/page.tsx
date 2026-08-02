@@ -33,6 +33,10 @@ const DETAIL_POLL_MS = 300_000;
 export default function StocksPage() {
   const [market, setMarket] = useState("US");
   const [universe, setUniverse] = useState<UniverseItem[]>([]);
+  // 지금 담긴 유니버스가 **어느 시장의 것인지**. 시장을 바꾼 직후에는 아직
+  // 이전 시장의 종목이 선택되어 있어, 그대로 조회하면 KR/AAPL 같은 조합이
+  // 만들어져 404 와 함께 "표시할 수 없습니다" 가 잠깐 스칩니다.
+  const [universeMarket, setUniverseMarket] = useState<string | null>(null);
   const [ticker, setTicker] = useState<string | null>(null);
   const [detail, setDetail] = useState<StockDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -59,10 +63,12 @@ export default function StocksPage() {
     // 보입니다 (실배포에서 확인된 버그).
     setDetail(null);
     setUniverse([]);
+    setUniverseMarket(null);
     api
       .universe(market)
       .then((u) => {
         setUniverse(u);
+        setUniverseMarket(market);
         const preferred = u.find((x) => x.ticker === wanted)?.ticker;
         setTicker(preferred ?? (u.length ? u[0].ticker : null));
         setError(u.length ? null : "이 시장에 수집된 데이터가 없습니다.");
@@ -82,6 +88,8 @@ export default function StocksPage() {
   const load = useCallback(
     async (clear = true) => {
       if (!ticker) return;
+      // 선택된 종목이 이 시장의 것이 아니면 아직 조회하지 않습니다.
+      if (universeMarket !== market) return;
       setDetailLoading(true);
       if (clear) {
         setAnalysis(null);
@@ -97,7 +105,7 @@ export default function StocksPage() {
         setDetailLoading(false);
       }
     },
-    [market, ticker],
+    [market, ticker, universeMarket],
   );
 
   useEffect(() => {

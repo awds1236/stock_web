@@ -33,13 +33,34 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
-def _slug(name: str) -> str:
-    """업종명을 파일명으로. 한글·공백·슬래시가 그대로 들어가면 안 됩니다.
+_SLUG_SAFE = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-")
 
-    프론트엔드에도 **같은 규칙**이 있습니다(lib/api.ts). 두 곳이 갈리면
-    정적 배포에서만 404 가 나고, 로컬에서는 재현되지 않습니다.
+
+def _slug(name: str) -> str:
+    """업종명을 파일명으로.
+
+    **퍼센트 인코딩을 쓰면 안 됩니다.** 한때 `quote(name)` 을 썼는데, 그러면
+    '건설' 이 `%EA%B1%B4%EC%84%A4` 라는 이름의 파일이 됩니다. 브라우저가 그
+    URL 을 요청하면 웹서버가 퍼센트 인코딩을 **디코딩해서** '건설' 이라는
+    파일을 찾으므로, 정작 디스크에 있는 `%EA%B1%B4...` 파일은 영원히 404 가
+    납니다. 이중 인코딩으로만 열리는데 브라우저는 그렇게 요청하지 않습니다.
+
+    실제로 이것 때문에 정적 배포에서 **모든 업종의 분석 버튼이 실패**했습니다
+    -- 한국은 한글이라서, 미국은 이름에 공백이 있어서(`%20`).
+
+    그래서 UTF-8 바이트 단위로 ASCII 만 남기고 나머지는 `_xx` 로 적습니다.
+    결과가 순수 ASCII 라 URL 디코딩이 항등이고, 어떤 호스트에서도 같습니다.
+    유니코드 파일명을 그대로 쓰는 방법도 있지만 정규화(NFC/NFD) 차이로
+    조용히 깨질 수 있어 피했습니다.
+
+    프론트엔드에 **같은 규칙**이 있습니다(lib/api.ts `sectorSlug`).
+    두 구현이 일치하는지는 `tests/test_sector_slug.py` 가 실제로 대조합니다.
     """
-    return quote(name, safe="")
+    out: list[str] = []
+    for byte in name.encode("utf-8"):
+        ch = chr(byte)
+        out.append(ch if ch in _SLUG_SAFE else f"_{byte:02x}")
+    return "".join(out)
 
 FORECAST_TARGETS = ("direction", "return", "volatility")
 # 정적 배포에는 21일(1개월) 예측만 포함합니다. 타깃×기간 전 조합을 생성하면

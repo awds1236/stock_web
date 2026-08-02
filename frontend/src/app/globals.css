@@ -61,7 +61,11 @@ a:hover { text-decoration: underline; }
 }
 .sidebar nav a:hover { background: var(--panel-2); text-decoration: none; }
 
-.main { flex: 1; padding: 24px 28px; max-width: 1200px; }
+/* min-width:0 이 필요합니다. flex 자식의 기본값은 min-width:auto 라서 내용보다
+   작아지기를 거부합니다. 그러면 넓은 표가 이 칸을 밀어내고, 카드에 걸어둔
+   overflow 는 영영 동작하지 않습니다 -- 태블릿 폭에서 페이지가 500px 넘게
+   밀린 원인이었습니다. */
+.main { flex: 1; min-width: 0; padding: 24px 28px; max-width: 1200px; }
 
 h2 { font-size: 19px; margin: 0 0 6px; }
 h3 { font-size: 15px; margin: 26px 0 10px; }
@@ -213,4 +217,45 @@ button.tiny, .btn.tiny {
   font-size: 11px;
   color: var(--muted);
   margin: -6px 0 12px;
+}
+
+/* ── 좁은 화면 ────────────────────────────────────────────────────────
+   이전에는 반응형 규칙이 하나도 없었습니다. 210px 고정 사이드바에 넓은 표가
+   더해져 390px 화면에서 페이지 전체가 가로로 400px 넘게 밀렸습니다.
+
+   원칙: **페이지 본문은 절대 가로로 스크롤되지 않습니다.** 넓은 것(표)은
+   자기 카드 안에서만 스크롤합니다. 페이지가 통째로 밀리면 사이드바와 제목까지
+   화면 밖으로 나가 길을 잃습니다. */
+@media (max-width: 720px) {
+  .layout { flex-direction: column; }
+
+  .sidebar {
+    width: auto;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    padding: 12px 14px;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  .sidebar .tag { margin-bottom: 10px; }
+  /* 세로 목록이면 메뉴만으로 첫 화면이 다 찹니다. 가로로 접어 넣습니다. */
+  .sidebar nav { display: flex; flex-wrap: wrap; gap: 4px; }
+  .sidebar nav a { padding: 5px 9px; font-size: 12px; }
+
+  .main { padding: 16px 12px; }
+
+  h2 { font-size: 17px; }
+  .metric .value { font-size: 18px; }
+}
+
+/* 넓은 표는 **자기 카드 안에서만** 스크롤합니다.
+   태블릿 폭(768px)에서도 표는 넘치므로 레이아웃 분기보다 넓게 잡습니다.
+
+   `:has(table)` 로 표가 든 카드만 고르는 것이 중요합니다. 모든 카드에
+   overflow 를 걸면 종목 검색 드롭다운(absolute)이 잘려 검색이 불가능해집니다
+   -- overflow-x:auto 는 overflow-y 까지 auto 로 만듭니다. */
+@media (max-width: 1000px) {
+  .card:has(table) { overflow-x: auto; }
+  th, td { padding: 7px 8px; white-space: nowrap; }
 }
