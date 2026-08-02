@@ -22,6 +22,8 @@ import pandas as pd
 
 from app.indicators import levels as lv
 from app.indicators import price as px
+from app.indicators import zones as zn
+from app.plan import scaled_plan
 from app.predict import sectors as sec
 from app.store import Store, get_store
 
@@ -138,6 +140,21 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
     industry_name = _first_valid(g, "industry")
     sector_ret_20d = _group_return(panel, sector_name, level="sector", window=20)
 
+    # 지지·저항 3+3 과 그 위에 얹은 분할 골격.
+    #
+    # 기존 `levels` 는 차트 참고선이라 그대로 두고, 여기서 **분할 주문에 쓸 수
+    # 있는 구간**을 따로 계산합니다. 선 하나로는 어디에 얼마를 걸지 정할 수
+    # 없기 때문입니다 (근거·폭·도달확률이 필요합니다).
+    zones = zn.price_zones(g)
+    plan = scaled_plan(
+        spot=last_close if last_close is not None else float("nan"),
+        supports=zones["supports"],
+        resistances=zones["resistances"],
+        atr=zones.get("atr_14"),
+        horizon_days=zones.get("horizon_days", 21),
+    )
+    regime = _regime(g)
+
     return {
         "market": market,
         "ticker": ticker,
@@ -176,6 +193,10 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
             }
             for x in swing
         ],
+        "zones": zones,
+        "plan": plan,
+        "regime": regime,
+        "scenarios": _scenarios(zones, regime),
         "interpretation": interpret_indicators(g)
         + interpret_levels(swing, cross_20_60, cross_50_200),
         "rules": {
@@ -204,8 +225,190 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
             RULE_CAVEAT,
             "유니버스는 현재 시가총액 상위 종목으로 제한되어 있어 상대순위에 "
             "생존편향이 있습니다.",
+            "지지·저항 구간은 여러 방법이 겹치는 가격대를 모은 것입니다. 개별 "
+            "방법의 근거 강도는 zones.method_notes 에 등급으로 적혀 있으며, "
+            "이동평균선은 그중 가장 약합니다.",
+            "도달 확률은 무추세·정규분포·일정 변동성 가정의 터치 확률입니다. "
+            "실제 수익률은 꼬리가 두꺼워 먼 가격의 확률은 이 값보다 높습니다.",
+            "분할 골격은 매매 추천이 아니라 '이미 매매하기로 정한 경우'의 체결 "
+            "구조 계산입니다. 분할 매수 자체는 기대수익을 높이지 않습니다.",
         ],
     }
+
+
+def _regime(g: pd.DataFrame) -> dict[str, Any]:
+    """지금이 **어떤 국면인가** -- 추세인지 횡보인지, 변동성이 어느 수준인지.
+
+    같은 지표라도 국면에 따라 뜻이 정반대가 됩니다. RSI 30 은 횡보장에서는
+    되돌림이지만 하락 추세에서는 그냥 계속 내려가는 중입니다. 그래서 지표를
+    나열하기 전에 국면을 먼저 판정합니다. 한국 시장 연구에서도 기술적 지표의
+    예측력은 **경기·시장 국면을 구분했을 때에만** 유의하게 개선되었습니다.
+
+    변동성을 백분위로 보는 이유: 변동성은 군집합니다 (Bollerslev 1986, GARCH).
+    수익률 방향과 달리 변동성은 실제로 예측 가능한 축이라, "지금이 조용한
+    구간인가"는 앞으로 며칠간의 폭을 가늠하는 데 방향보다 쓸모가 큽니다.
+    """
+    close = g["close"].reset_index(drop=True)
+    out: dict[str, Any] = {
+        "trend": {"label": "판정 불가", "basis": "데이터 부족"},
+        "volatility": {"label": "판정 불가"},
+        "range_position": None,
+        "summary": None,
+    }
+    if len(close) < 60:
+        return out
+
+    atr_s = px.atr(g["high"], g["low"], close, 14).dropna()
+    atr = float(atr_s.iloc[-1]) if len(atr_s) else float("nan")
+    last = float(close.iloc[-1])
+
+    # 추세: 긴 이동평균의 기울기와 '가격이 그 선에서 몇 ATR 떨어져 있는가'.
+    # 퍼센트 대신 ATR 배수를 쓰는 이유는 종목마다 정상 변동폭이 다르기 때문입니다.
+    anchor_w = 200 if len(close) >= 210 else 60
+    anchor = px.sma(close, anchor_w).dropna()
+    trend: dict[str, Any] = {"label": "판정 불가", "basis": "이동평균 계산 불가"}
+    if len(anchor) >= 21 and np.isfinite(atr) and atr > 0:
+        slope = float(anchor.iloc[-1] / anchor.iloc[-21] - 1)
+        gap_atr = float((last - anchor.iloc[-1]) / atr)
+        # 기울기와 이격을 모두 봅니다. 기울기만 보면 장기선이 아직 못 따라온
+        # 초기 추세를 놓치고(실제로 종가가 200일선 위 3.9 ATR 인데 '횡보'로
+        # 찍혔습니다), 이격만 보면 되돌림 한 번에 라벨이 뒤집힙니다.
+        # 이격이 2 ATR 을 넘으면 기울기가 완만해도 방향을 인정합니다.
+        if (slope > 0.005 and gap_atr > 0.5) or gap_atr > 2.0:
+            label = "상승 추세"
+        elif (slope < -0.005 and gap_atr < -0.5) or gap_atr < -2.0:
+            label = "하락 추세"
+        else:
+            label = "추세 없음 (횡보)"
+        trend = {
+            "label": label,
+            "anchor_window": anchor_w,
+            "anchor_slope_20d": _f(slope),
+            "gap_from_anchor_atr": _f(gap_atr),
+            "basis": (
+                f"{anchor_w}일선의 20거래일 기울기 {slope * 100:+.1f}%, "
+                f"종가는 그 선에서 {gap_atr:+.1f} ATR 떨어져 있습니다."
+            ),
+            "caveat": "추세 판정은 사후적입니다. 전환점에서는 라벨이 늦게 바뀝니다.",
+        }
+    out["trend"] = trend
+
+    # 변동성 국면: 20일 실현변동성의 최근 2년 백분위.
+    vol_series = px.realized_volatility(close, 20).dropna()
+    if len(vol_series):
+        v = float(vol_series.iloc[-1])
+        hist = vol_series.tail(504)
+        pct = float((hist <= v).mean()) if len(hist) >= 60 else None
+        vol60 = px.realized_volatility(close, 60).dropna()
+        ratio = (
+            _f(v / float(vol60.iloc[-1]))
+            if len(vol60) and float(vol60.iloc[-1]) > 0
+            else None
+        )
+        if pct is None:
+            label = "판정 불가"
+        elif pct >= 0.8:
+            label = "확대 (상위 20%)"
+        elif pct <= 0.2:
+            label = "수축 (하위 20%)"
+        else:
+            label = "보통"
+        out["volatility"] = {
+            "label": label,
+            "vol_20d": _f(v),
+            "percentile_2y": _f(pct),
+            "ratio_20d_over_60d": ratio,
+            "atr_14": _f(atr),
+            "atr_pct": _f(atr / last) if np.isfinite(atr) and last else None,
+            "caveat": "변동성은 방향이 아니라 폭입니다. 다만 군집성 때문에 방향보다 "
+                      "예측 가능성이 높아, 구간 폭과 비중 산정의 근거로 씁니다.",
+        }
+
+    # 52주 레인지 안의 위치 (0 = 저가, 1 = 고가).
+    window = min(252, len(close))
+    hi = float(np.nanmax(g["high"].tail(window)))
+    lo = float(np.nanmin(g["low"].tail(window)))
+    if np.isfinite(hi) and np.isfinite(lo) and hi > lo:
+        out["range_position"] = {
+            "value": _f((last - lo) / (hi - lo)),
+            "high": _f(hi),
+            "low": _f(lo),
+            "window_days": window,
+        }
+
+    rp = out["range_position"]
+    where = (
+        f" · 52주 레인지 {rp['value'] * 100:.0f}% 지점"
+        if rp and rp["value"] is not None
+        else ""
+    )
+    vol_label = out["volatility"].get("label", "판정 불가")
+    out["summary"] = f"{trend['label']} · 변동성 {vol_label}{where}"
+    return out
+
+
+def _scenarios(zones: dict, regime: dict) -> list[dict]:
+    """앞으로를 **조건부로만** 서술하기 위한 뼈대.
+
+    "오를 것이다"는 이 앱이 하지 않는 말입니다. 대신 어떤 가격이 깨지면 무엇이
+    바뀌는지, 그리고 그 일이 21거래일 안에 일어날 확률이 계산상 얼마인지를
+    적습니다. 확률의 출처는 지지·저항 구간의 터치 확률이며, 상방·하방 사건은
+    서로 배타적이지 않습니다 (둘 다 일어날 수 있습니다).
+    """
+    sup = zones.get("supports") or []
+    res = zones.get("resistances") or []
+    if zones.get("insufficient") or (not sup and not res):
+        return []
+
+    horizon = zones.get("horizon_days", 21)
+    p_up = res[0].get("touch_prob_21d") if res else None
+    p_dn = sup[0].get("touch_prob_21d") if sup else None
+    out: list[dict] = []
+
+    if res:
+        nxt = (
+            f"다음 저항은 {_fmt_price(res[1]['price'])} 부근입니다."
+            if len(res) > 1
+            else "이 구간 위에는 계산된 저항이 없습니다 (과거 가격대가 없는 영역)."
+        )
+        out.append({
+            "name": "상단 이탈",
+            "trigger": f"{_fmt_price(res[0]['low'])}~{_fmt_price(res[0]['high'])} "
+                       "구간을 종가로 상회",
+            "touch_prob": p_up,
+            "then": "이 구간은 저항에서 지지로 역할이 바뀝니다. " + nxt,
+            "invalidated_by": "상회 후 곧바로 구간 아래로 되돌아오면 실패한 돌파입니다.",
+        })
+    if sup:
+        nxt = (
+            f"다음 지지는 {_fmt_price(sup[1]['price'])} 부근입니다."
+            if len(sup) > 1
+            else "이 구간 아래에는 계산된 지지가 없습니다."
+        )
+        out.append({
+            "name": "하단 이탈",
+            "trigger": f"{_fmt_price(sup[0]['low'])}~{_fmt_price(sup[0]['high'])} "
+                       "구간을 종가로 하회",
+            "touch_prob": p_dn,
+            "then": "이 구간은 지지에서 저항으로 바뀝니다. " + nxt,
+            "invalidated_by": "분할 매수 전제(되돌림)가 깨지는 지점입니다.",
+        })
+    if p_up is not None and p_dn is not None:
+        out.append({
+            "name": "현 구간 유지",
+            "trigger": "양쪽 구간을 모두 건드리지 않음",
+            # 상방·하방 사건은 겹칠 수 있으므로 1 - p_up - p_dn 은 '어느 쪽도
+            # 건드리지 않을 확률'의 **하한**입니다. 보수적인 방향이라 그대로 씁니다.
+            "touch_prob": round(max(0.0, 1.0 - p_up - p_dn), 4),
+            "prob_note": "상방·하방은 배타적이지 않아 이 값은 하한입니다.",
+            "then": f"{regime['trend']['label']} 판정이 유지됩니다. 사다리는 앞 "
+                    "단계만 체결된 상태로 남습니다.",
+            "invalidated_by": "-",
+        })
+
+    for s in out:
+        s["horizon_days"] = horizon
+    return out
 
 
 def matched_rules(g: pd.DataFrame, universe_mean_ret60: float | None) -> list[str]:
@@ -686,6 +889,16 @@ def _diff(a: float | None, b: float | None) -> float | None:
 def _cum(returns: pd.Series) -> float | None:
     r = returns.dropna()
     return _f(float((1 + r).prod() - 1)) if len(r) else None
+
+
+def _fmt_price(v: float) -> str:
+    """가격 표기. 원화는 정수, 달러는 소수 둘째 자리까지 -- 시장을 따로 묻지 않고
+    크기로 판단합니다 ($182.4 를 '182' 로 적으면 센트가 사라집니다)."""
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{f:,.0f}" if abs(f) >= 1000 else f"{f:,.2f}"
 
 
 def _f(v) -> float | None:

@@ -201,6 +201,10 @@ export type StockReport = {
     surge_ratio: number | null;
   };
   levels: Level[];
+  zones: Zones;
+  plan: Plan;
+  regime: Regime;
+  scenarios: Scenario[];
   interpretation: Interpretation[];
   rules: RuleBlock;
   relative: {
@@ -219,6 +223,131 @@ export type StockReport = {
     n_universe: number;
   };
   caveats: string[];
+};
+
+/** 지지·저항은 선이 아니라 근거가 겹치는 **구간**입니다 (backend/app/indicators/zones.py). */
+export type Zone = {
+  kind: "support" | "resistance";
+  price: number;
+  low: number;
+  high: number;
+  distance_pct: number;
+  distance_atr: number;
+  score: number;
+  confidence: "높음" | "보통" | "낮음";
+  n_methods: number;
+  methods: string[];
+  evidence: { method: string; price: number; quality: number; detail: string }[];
+  touch_prob_21d: number | null;
+  sigma_days: number | null;
+};
+
+export type Zones = {
+  as_of: string | null;
+  spot: number | null;
+  atr_14?: number | null;
+  atr_pct?: number | null;
+  vol_annual: number | null;
+  horizon_days: number;
+  supports: Zone[];
+  resistances: Zone[];
+  method_notes: { method: string; evidence_weight: number; basis: string }[];
+  insufficient: boolean;
+  note: string;
+};
+
+export type PlanStep = {
+  label: string;
+  kind: "market" | "limit";
+  price: number;
+  low: number;
+  high: number;
+  weight: number;
+  distance_pct: number;
+  touch_prob_21d: number | null;
+  confidence: string | null;
+  why: string;
+};
+
+export type Plan =
+  | { available: false; reason: string }
+  | {
+      available: true;
+      horizon_days: number;
+      spot: number;
+      atr_14: number;
+      entry: {
+        steps: PlanStep[];
+        weighting: string;
+        weighting_basis: string;
+        avg_cost_if_all_filled: number | null;
+        partial_fills: {
+          filled_steps: number;
+          through: string;
+          capital_used: number;
+          capital_idle: number;
+          avg_cost: number | null;
+        }[];
+        prob_no_limit_fill_21d: number | null;
+      };
+      invalidation: {
+        price: number;
+        basis: string;
+        distance_pct: number | null;
+        meaning: string;
+      };
+      exit: {
+        steps: PlanStep[];
+        weighting_basis: string;
+        weight_sold_if_all_reached: number;
+        weight_still_held: number;
+        avg_exit_if_all_reached: number | null;
+        why_split: string;
+      };
+      risk: {
+        risk_per_position_pct: number | null;
+        reward_to_risk: number | null;
+        max_position_for_1pct_account_risk: number | null;
+        basis: string;
+      };
+      caveats: string[];
+    };
+
+export type Regime = {
+  trend: {
+    label: string;
+    basis: string;
+    anchor_window?: number;
+    anchor_slope_20d?: number | null;
+    gap_from_anchor_atr?: number | null;
+    caveat?: string;
+  };
+  volatility: {
+    label: string;
+    vol_20d?: number | null;
+    percentile_2y?: number | null;
+    ratio_20d_over_60d?: number | null;
+    atr_14?: number | null;
+    atr_pct?: number | null;
+    caveat?: string;
+  };
+  range_position: {
+    value: number | null;
+    high: number | null;
+    low: number | null;
+    window_days: number;
+  } | null;
+  summary: string | null;
+};
+
+export type Scenario = {
+  name: string;
+  trigger: string;
+  touch_prob: number | null;
+  prob_note?: string;
+  then: string;
+  invalidated_by: string;
+  horizon_days: number;
 };
 
 export type CrossState = {

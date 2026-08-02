@@ -237,6 +237,125 @@ KRX 투자자 구분의 **연기금등**은 연기금·공제회·국가/지방�
 
 ---
 
+## 3-A. 지지·저항을 어떻게 계산하는가 — 그리고 무엇을 믿는가
+
+지지·저항은 이 앱에서 근거가 가장 약한 축입니다. 그런데도 분할 매수·매도에는
+반드시 필요합니다. 그래서 없애는 대신 **근거를 등급으로 노출하는 방식**을
+택했습니다. 사용자가 어떤 선을 얼마나 믿을지 스스로 정할 수 있어야 합니다.
+
+### 선이 아니라 구간
+
+정확히 71,200원이라는 선을 주면 사용자는 그 가격에 지정가를 걸고, 71,250원에서
+반등하면 놓칩니다. 그래서 결과는 항상 `low ~ high` 구간이고, 폭은 ATR(14)로
+정합니다 — 변동성이 큰 종목은 넓게, 조용한 종목은 좁게.
+
+### 여섯 가지 방법을 독립적으로 돌린 뒤 겹치는 곳을 찾습니다 (confluence)
+
+한 방법만 가리키는 가격보다 서로 다른 근거가 겹치는 가격이 더 자주 의식됩니다.
+각 방법의 가중치는 **문헌 근거의 세기**로 정했습니다.
+
+| 방법 | 가중치 | 근거 | 남는 의심 |
+|---|---|---|---|
+| 거래량 밀집대 | 1.0 | Grinblatt & Han (2005, JFE) — 처분효과로 생긴 미실현손익 오버행이 수익률을 횡단면에서 예측합니다. 많은 물량이 체결된 가격은 보유자 다수의 취득단가이고, 그 부근에서 실제로 매도 압력이 생깁니다. Frazzini (2006, JF) 도 같은 방향 | 오버행 효과는 존재하되 크기가 작고, 일별 OHLC 로 복원한 가격대 분포는 근사입니다 |
+| 52주 고가/저가 | 1.0 | George & Hwang (2004, JF) — 52주 신고가 근접도가 모멘텀보다 강한 예측 변수. Huddart, Lang & Yetman (2009, RFS) — 이 부근에서 거래량이 실제로 튐. Li & Yu (2012, JFE) — 심리적 앵커 | 국내 시장의 모멘텀 효과는 미국 대비 약합니다 |
+| 스윙 피벗 클러스터 | 0.7 | Osler (2000, FRBNY EPR) — 공표된 지지·저항 부근에서 추세 중단이 유의하게 잦음. Osler (2003, JF) — 이유는 주문 군집(이익실현은 라운드넘버에, 손절은 그 너머에) | 주로 **외환 인트라데이** 증거이고 효과 크기가 작습니다. 파라미터(윈도우·허용폭)에 민감합니다 |
+| 라운드 넘버 | 0.6 | Osler (2003, JF); Sonnemans (2006, JEBO) 가격 군집; Bhattacharya, Holden & Jacobsen (2012, Management Science) 라운드넘버 전후 매수·매도 불균형 | 존재는 반복 확인됐지만 크기가 작습니다 |
+| 주요 이동평균 | 0.4 | Brock, Lakonishok & LeBaron (1992, JF) 이동평균 규칙의 초과수익 | **Sullivan, Timmermann & White (1999, JF)** 가 데이터 스누핑을 보정하자 대부분 사라졌습니다. 이 앱에서 가장 약한 근거이며, "많은 사람이 같은 선을 본다"는 이유로만 후보에 넣습니다 |
+| 최근 20일 극값 | 0.4 | — | 별도 문헌 근거를 주장하지 않습니다 |
+
+화면과 AI 프롬프트 모두 이 표(`zones.method_notes`)를 함께 받습니다. 근거가
+이동평균 하나뿐인 구간은 그렇다고 표시됩니다.
+
+### 도달 확률 — 계산이지 예측이 아닙니다
+
+각 구간에 대해 21거래일 안에 **한 번이라도 그 가격을 건드릴 확률**을 반사원리로
+계산합니다:
+
+```
+P = 2 · Φ( -|ln(barrier/spot)| / (σ√T) )
+```
+
+종가 기준이 아니라 터치 기준인 이유는 지정가가 장중에 체결되기 때문입니다.
+종가 확률을 쓰면 체결 가능성을 정확히 절반으로 과소평가합니다.
+
+들어간 가정 셋과 각각이 깨질 때의 방향:
+
+* **무추세** — 추세가 있으면 한쪽 확률이 실제보다 낮게 나옵니다.
+* **일정 변동성** — 실제 변동성은 군집합니다 (Bollerslev 1986). 조용한 구간에서
+  계산하면 과소, 급등락 직후면 과대 추정됩니다.
+* **정규분포** — 실제 수익률은 꼬리가 두꺼워 **먼 가격의 도달 확률은 이 계산보다
+  높습니다**.
+
+그래서 이 숫자는 "어디에 더 많은 비중을 둘까"의 상대적 저울로만 씁니다.
+
+---
+
+## 3-B. 분할 매수·매도 — 추천이 아니라 산술
+
+앱은 "사라/팔라"를 말하지 않습니다. 사용자가 **이미 매매하기로 정했다는 전제**
+아래에서 어디에 얼마씩 나눌지를 계산할 뿐입니다.
+
+### 분할 매수는 기대수익을 높이지 않습니다
+
+이 사실을 화면과 프롬프트 양쪽에 박아두었습니다. Constantinides (1979, JFQA) 는
+기대효용 틀에서 정액분할매수가 열등함을 보였고, Shtekhman 외 (Vanguard, 2012)
+시뮬레이션에서도 일시금 투자가 약 2/3 구간에서 분할을 이겼습니다. 자산은
+평균적으로 오르므로 현금으로 기다리는 시간은 비용입니다. **분할이 줄이는 것은
+진입 시점 위험과 후회이지 기대수익이 아닙니다.**
+
+### 그래서 비중을 도달 확률에 비례시킵니다
+
+아래에 지정가 셋만 걸어두면 가격이 안 내려올 때 한 주도 못 삽니다. 그 확률은
+계산할 수 있으므로(1 − P(1차 지지 터치)), 그만큼을 **즉시 체결분**으로 돌립니다.
+남은 몫은 각 구간의 도달 확률에 비례해 나눕니다. 이 규칙은 위 DCA 문헌과도
+일치합니다 — 체결되지 않을 자본을 놀리지 않습니다.
+
+화면은 "1차만 체결된 경우"의 평균단가를 함께 보여줍니다. 전량 체결 평균단가만
+보여주면 착시가 생기기 때문입니다. 실제로는 앞 단계만 체결된 채 반등하는 경우가
+가장 흔합니다.
+
+### 분할 매도의 근거는 매수와 다릅니다
+
+Odean (1998, JF) 의 처분효과 — 투자자는 오른 종목을 너무 빨리 팔고 내린 종목을
+너무 오래 들고 있습니다. 미리 정한 청산 사다리는 그 편향에 대한 **사전 약속**
+으로 작동합니다. 매수보다 매도 쪽에서 분할의 정당성이 더 큽니다.
+다만 모든 저항에 도달해도 팔리지 않고 남는 비중을 함께 표시합니다.
+
+### 무효화 가격이 먼저입니다
+
+최하단 지지 구간의 아래 경계에서 0.5 ATR 더 내려간 곳을 "이 계획이 틀렸다고
+인정하는 가격"으로 둡니다. 경계에 딱 붙이면 일상적인 하루 변동에도 걸립니다.
+여기서 1R(평균단가 → 무효화)을 정의하고, "계좌의 1% 만 잃겠다면 투입 비중은
+얼마인가"를 역산합니다. 변동성에 맞춰 노출을 조절하는 방식의 근거는
+Moreira & Muir (2017, JF) 와 Harvey 외 (2018) 입니다.
+
+**지지가 뚫리면 그 가격은 저항이 됩니다.** 사다리는 하락이 '되돌림'일 때만
+유효하고, 추세 전환일 때는 물타기가 됩니다. 무효화 가격은 그 둘을 가르는
+선언이지 예측이 아닙니다.
+
+### 회전율은 비용입니다
+
+Barber & Odean (2000, JF) — 거래가 잦은 계좌일수록 수익률이 낮았습니다. 단계를
+늘릴수록 수수료·세금·슬리피지가 늘어나므로 이 앱은 단계를 3개로 제한합니다.
+
+---
+
+## 3-C. 국면을 먼저 판정하는 이유
+
+같은 지표라도 국면에 따라 뜻이 정반대가 됩니다. RSI 30 은 횡보장에서는
+되돌림이지만 하락 추세에서는 그냥 계속 내려가는 중입니다. 한국 시장 연구에서도
+기술적 지표의 예측력은 **경기·시장 국면을 구분했을 때에만** 유의하게
+개선되었습니다(§0-A). 그래서 종목 리포트는 지표를 나열하기 전에 셋을 판정합니다.
+
+* **추세** — 장기 이동평균의 20거래일 기울기 + 종가가 그 선에서 몇 ATR 떨어져
+  있는가. 퍼센트 대신 ATR 배수를 쓰는 이유는 종목마다 정상 변동폭이 다르기
+  때문입니다. 판정은 사후적이며 전환점에서 늦게 바뀝니다.
+* **변동성** — 20일 실현변동성의 최근 2년 백분위. 변동성은 군집하므로
+  (Bollerslev 1986) 수익률 방향과 달리 실제로 예측 가능한 축입니다.
+* **52주 레인지 위치** — 0 = 저가, 1 = 고가.
+
+---
+
 ## 4. 검증 방법론 — 이 앱이 신뢰를 주장하는 근거
 
 지표 선택보다 **검증 방법이 결과를 더 크게 좌우합니다**.
@@ -417,12 +536,28 @@ P6이 이 앱에서 수급의 위상을 최종 결정합니다. 개선이 없으
 | 금지 | 이유 |
 |---|---|
 | 점 예측 ("내일 X원") | 앱 전체가 이 원칙 위에 있는데 AI 만 예외면 원칙이 무의미해집니다 |
-| 매수/매도/보유 추천 | 서술과 결정은 다른 일입니다 |
+| 매수/매도 판단 대행 ("지금 사십시오") | 서술과 결정은 다른 일입니다 |
 | 데이터에 없는 사실 | 검증 불가능한 문장이 검증된 숫자와 같은 화면에 섞입니다 |
+| **새로운 지지선·저항선·목표가 생성** | 모델이 자기 나름의 선을 만들면 화면의 숫자와 AI 문장이 갈립니다. 가격은 `zones`·`plan` 에 있는 값만 인용하게 합니다 |
 | `attention` 밖 종목 추가 | 규칙에 걸리지 않은 종목이 '주목 종목'으로 승격됩니다 |
 
 출력의 마지막 두 절은 항상 **반대 해석**과 **이 분석의 한계**로 고정합니다.
 강세 서술만 남으면 사용자는 그것을 추천으로 읽습니다.
+
+### 분할 골격은 왜 예외로 허용했는가
+
+"사라/팔라"는 여전히 금지입니다. 다만 **사용자가 이미 매매하기로 정한 경우의
+체결 구조**(어느 구간에 몇 %, 어디서 전제가 깨지는지)는 판단이 아니라 계산이고,
+그 숫자는 `app/plan.py` 가 이미 만들어 둡니다(§3-B). 모델은 그것을 설명할 뿐
+직접 계산하지 않습니다. 프롬프트는 서술할 때마다 "매매 여부 자체는 당신의
+판단"이라는 전제를 함께 쓰도록 요구하고, **분할 매수가 기대수익을 높이는 기법이
+아니라는 점**을 반드시 포함하게 합니다.
+
+### 근거 등급을 함께 넘기는 이유
+
+지지·저항이라고 다 같은 지지·저항이 아닙니다. 등급(§3-A)을 주지 않으면 모델은
+거래량 밀집대와 이동평균선을 같은 무게로 씁니다. 그러면 '이 분석의 한계' 절이
+형식적인 면피 문구가 되고, 사용자는 어떤 선을 더 믿을지 알 수 없게 됩니다.
 
 ### 남는 위험 — 없앨 수 없는 것
 
@@ -473,6 +608,25 @@ P6이 이 앱에서 수급의 위상을 최종 결정합니다. 개선이 없으
 - [FinBench — 금융 예측의 보정·불확실성 벤치마킹 (확신-실력 격차)](https://arxiv.org/html/2607.16229)
 - [Brier Score: Calibration, Resolution, Uncertainty 분해](https://www.emergentmind.com/topics/brier-score-term)
 - [머신러닝을 이용한 한국 주식시장 변동성 예측: Multi-Input LSTM (KDI)](https://eiec.kdi.re.kr/policy/domesticView.do?ac=0000190411) — 변동성은 ML이 HAR 대비 우수
+
+지지·저항과 분할 체결 (§3-A, §3-B):
+- Osler, C. (2000) — [Support for Resistance: Technical Analysis and Intraday Exchange Rates (FRBNY Economic Policy Review)](https://www.newyorkfed.org/medialibrary/media/research/epr/00v06n2/0007osle.pdf) — 공표된 지지·저항 부근에서 추세 중단이 유의하게 잦음
+- Osler, C. (2003) — [Currency Orders and Exchange Rate Dynamics: An Explanation for the Predictive Success of Technical Analysis (Journal of Finance 58-5)](https://onlinelibrary.wiley.com/doi/10.1046/j.1540-6261.2003.00610.x) — 이익실현 주문은 라운드넘버에, 손절 주문은 그 너머에 군집
+- Grinblatt, M. & Han, B. (2005) — [Prospect Theory, Mental Accounting, and Momentum (Journal of Financial Economics 78-2)](https://www.sciencedirect.com/science/article/abs/pii/S0304405X05001066) — 미실현손익 오버행의 횡단면 예측력. 거래량 밀집대 가중치의 근거
+- Frazzini, A. (2006) — [The Disposition Effect and Underreaction to News (Journal of Finance 61-4)](https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2006.00896.x)
+- George, T. & Hwang, C. (2004) — [The 52-Week High and Momentum Investing (Journal of Finance 59-5)](https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2004.00695.x)
+- Huddart, S., Lang, M. & Yetman, M. (2009) — [Volume and Price Patterns Around a Stock's 52-Week Highs and Lows (Review of Financial Studies)](https://academic.oup.com/rfs/article/22/6/2109/1592038)
+- Li, J. & Yu, J. (2012) — [Investor Attention, Psychological Anchors, and Stock Return Predictability (Journal of Financial Economics 104-2)](https://www.sciencedirect.com/science/article/abs/pii/S0304405X11002583)
+- Bhattacharya, U., Holden, C. & Jacobsen, S. (2012) — [Penny Wise, Dollar Foolish: Buy-Sell Imbalances On and Around Round Numbers (Management Science 58-2)](https://pubsonline.informs.org/doi/10.1287/mnsc.1110.1364)
+- Brock, W., Lakonishok, J. & LeBaron, B. (1992) — [Simple Technical Trading Rules and the Stochastic Properties of Stock Returns (Journal of Finance 47-5)](https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.1992.tb04681.x)
+- Sullivan, R., Timmermann, A. & White, H. (1999) — [Data-Snooping, Technical Trading Rule Performance, and the Bootstrap (Journal of Finance 54-5)](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00163) — **이동평균 규칙 가중치를 낮게 잡은 근거**
+- Constantinides, G. (1979) — [A Note on the Suboptimality of Dollar-Cost Averaging as an Investment Policy (JFQA 14-2)](https://www.cambridge.org/core/journals/journal-of-financial-and-quantitative-analysis/article/abs/note-on-the-suboptimality-of-dollarcost-averaging-as-an-investment-policy/0C0E9E1A5A0BD2A6A0F5D6C2A0B4C5F1)
+- Shtekhman, A., Erb, C. & Ansello, D. (2012) — [Dollar-Cost Averaging Just Means Taking Risk Later (Vanguard Research)](https://static.vgcontent.info/crp/intl/auw/docs/literature/research/dollar-cost-averaging-just-means-taking-risk-later-tlisdca.pdf) — 일시금이 약 2/3 구간에서 우세
+- Odean, T. (1998) — [Are Investors Reluctant to Realize Their Losses? (Journal of Finance 53-5)](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00072) — 처분효과. 분할 매도의 근거
+- Barber, B. & Odean, T. (2000) — [Trading Is Hazardous to Your Wealth (Journal of Finance 55-2)](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00226) — 단계 수를 3개로 제한한 근거
+- Moreira, A. & Muir, T. (2017) — [Volatility-Managed Portfolios (Journal of Finance 72-4)](https://onlinelibrary.wiley.com/doi/10.1111/jofi.12513)
+- Harvey, C. 외 (2018) — [The Impact of Volatility Targeting (SSRN)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3175538)
+- Bollerslev, T. (1986) — [Generalized Autoregressive Conditional Heteroskedasticity (Journal of Econometrics 31-3)](https://www.sciencedirect.com/science/article/abs/pii/0304407686900631) — 변동성 군집. 국면 백분위와 확률 계산의 전제
 
 미국 시장:
 - [Information Propagation Across Investor Types: Korean Equity Market — 한국의 종목별 투자자 유형 공시가 예외적임을 서술](https://arxiv.org/pdf/2603.20271)

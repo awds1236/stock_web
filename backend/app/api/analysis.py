@@ -430,6 +430,17 @@ def cached_forecast(market: str, target: str, horizon_days: int) -> ForecastOut:
     return out
 
 
+def peek_forecast(market: str, target: str, horizon_days: int) -> ForecastOut | None:
+    """**계산하지 않고** 캐시에만 물어봅니다.
+
+    AI 서술에 예측을 곁들이려고 워크포워드를 새로 돌리면, 버튼 한 번이 수십 초
+    멈춥니다. 예측은 이미 계산돼 있을 때만 얹고, 없으면 없는 대로 씁니다 --
+    프롬프트가 예측 블록의 부재를 이미 다루고 있습니다.
+    """
+    hit = _FORECAST_CACHE.get((market, target, horizon_days))
+    return hit[1] if hit is not None and hit[0] == _data_stamp(market) else None
+
+
 def invalidate_forecast_cache(market: str | None = None) -> None:
     """수집 직후 호출. 데이터 스탬프로도 걸리지만 명시적으로 비워둡니다."""
     if market is None:

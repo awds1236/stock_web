@@ -42,14 +42,46 @@ def run_stock_analysis(market: str, ticker: str) -> LogEntry:
     market = market.upper()
     report = reports.stock_report(market, ticker)
     label = report.get("name") or ticker
+    forecast = _forecast_slice(market, ticker)
+    facts: dict[str, Any] = dict(report)
+    if forecast:
+        # 로그에도 남깁니다. 나중에 "그때 무엇을 보고 그렇게 썼나"를 되짚을 때
+        # 예측 블록이 빠져 있으면 서술의 절반이 근거 없이 남습니다.
+        facts["forecast"] = forecast
     return _run(
         kind="stock",
         market=market,
         subject=ticker,
         subject_label=f"{label} ({ticker})",
-        facts=report,
-        user_prompt=prompts.stock_prompt(report),
+        facts=facts,
+        user_prompt=prompts.stock_prompt(report, forecast),
     )
+
+
+def _forecast_slice(market: str, ticker: str) -> dict | None:
+    """이미 계산된 워크포워드 예측에서 이 종목 몫만.
+
+    **없으면 없는 대로 둡니다.** 여기서 새로 계산하면 AI 버튼 한 번이 수십 초
+    멈추고, 사용자는 AI 가 느린 것으로 오해합니다. 품질 지표는 유니버스 전체
+    기준이라 종목을 잘라내도 그대로 유효합니다.
+    """
+    try:
+        from app.api.analysis import peek_forecast
+    except Exception:  # noqa: BLE001 -- 예측 모듈이 없어도 서술은 되어야 합니다
+        return None
+    out = peek_forecast(market, "direction", 21)
+    if out is None:
+        return None
+    latest = [r for r in out.latest if r.get("ticker") == ticker]
+    if not latest:
+        return None
+    return {
+        "target": out.target,
+        "horizon_days": out.horizon_days,
+        "this_stock": latest[0],
+        "quality": out.quality.model_dump(),
+        "caveat": out.caveat,
+    }
 
 
 def run_sector_analysis(market: str, sector: str, *, level: str = "industry") -> LogEntry:

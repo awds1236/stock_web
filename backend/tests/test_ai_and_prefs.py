@@ -162,7 +162,21 @@ class TestPrompts:
     def test_system_forbids_invention_and_point_forecasts(self):
         assert "지어내지" in prompts.SYSTEM
         assert "점 예측" in prompts.SYSTEM
-        assert "추천을 하지" in prompts.SYSTEM
+
+    def test_system_forbids_deciding_for_the_user(self):
+        """분할 골격을 허용하되 **판단 대행은 여전히 금지**여야 합니다.
+
+        `plan` 블록이 생기면서 규칙 3 의 문구가 바뀌었습니다. '체결 구조는
+        서술해도 된다'가 '사라고 해도 된다'로 새어나가지 않도록, 금지 예문이
+        프롬프트에 그대로 남아 있는지 확인합니다.
+        """
+        assert "매수/매도 판단을 대신하지" in prompts.SYSTEM
+        assert "지금 사십시오" in prompts.SYSTEM
+        assert "이미 매매하기로 정했다는 가정" in prompts.SYSTEM
+
+    def test_system_bans_inventing_price_levels(self):
+        """모델이 자기 나름의 지지선을 만들면 화면과 숫자가 갈립니다."""
+        assert "새로운\n   지지선·저항선·목표가를 만들어내지" in prompts.SYSTEM
 
     def test_stock_prompt_embeds_the_computed_numbers(self):
         report = {"market": "US", "ticker": "AAA", "name": "A Corp",
@@ -170,6 +184,26 @@ class TestPrompts:
         text = prompts.stock_prompt(report)
         assert "61.5" in text, "근거 숫자가 프롬프트에 없으면 모델이 지어냅니다"
         assert "AAA" in text
+
+    def test_stock_prompt_asks_for_zones_plan_and_scenarios(self):
+        text = prompts.stock_prompt({"market": "KR", "ticker": "005930"})
+        for section in ("## 지금 국면", "## 지지 구간 셋", "## 저항 구간 셋",
+                        "## 분할 매수 골격", "## 분할 매도 골격",
+                        "## 앞으로의 조건부 시나리오", "## 반대 해석",
+                        "## 이 분석의 한계"):
+            assert section in text, f"{section} 절이 프롬프트에서 빠졌습니다"
+
+    def test_stock_prompt_states_whether_forecast_is_attached(self):
+        """예측 유무를 안 알려주면 모델이 없는 블록을 상상해서 씁니다."""
+        assert "예측 블록은 없습니다" in prompts.stock_prompt({"ticker": "A"})
+        with_fc = prompts.stock_prompt({"ticker": "A"}, {"target": "direction"})
+        assert "예측 블록은 있습니다" in with_fc
+        assert "direction" in with_fc
+
+    def test_stock_prompt_requires_the_dca_honesty(self):
+        """분할 매수가 기대수익을 높인다는 오해를 프롬프트가 막아야 합니다."""
+        text = prompts.stock_prompt({"ticker": "A"})
+        assert "기대수익을 높이는 기법이 **아니라는**" in text
 
     def test_market_prompt_bans_inventing_new_tickers(self):
         text = prompts.market_prompt({"market": "KR", "attention": []})

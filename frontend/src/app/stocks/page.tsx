@@ -4,6 +4,7 @@ import { AIAnalysisCard } from "@/components/AIAnalysisCard";
 import { Freshness } from "@/components/Freshness";
 import { LiveQuote } from "@/components/LiveQuote";
 import { StockSearch } from "@/components/StockSearch";
+import { TradePlanPanel } from "@/components/TradePlanPanel";
 import {
   api,
   num,
@@ -327,6 +328,15 @@ export default function StocksPage() {
                   note="점수가 아니라 개수입니다"
                 />
               </div>
+
+              {/* 지지·저항과 분할 골격을 규칙 판정보다 먼저 둡니다. 사용자가
+                  이 화면에서 실제로 쓰려는 것이 여기이기 때문입니다. */}
+              <TradePlanPanel
+                zones={report.zones}
+                plan={report.plan}
+                regime={report.regime}
+                scenarios={report.scenarios}
+              />
 
               <h3>규칙 판정</h3>
               <div className="card">
