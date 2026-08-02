@@ -69,7 +69,7 @@ Gu, Kelly, Xiu (2020)가 900개 이상의 예측변수로 측정한 개별종목
 | Phase 6 API·대시보드 | 완료 — 대상 단위 분석 · AI 서술 · 자동 갱신 |
 | Phase 7 모의 포트폴리오 | 미착수 |
 
-테스트 288개 통과.
+테스트 314개 통과.
 
 ## 분석은 대상 단위로, 버튼을 눌렀을 때만
 
@@ -390,7 +390,7 @@ AI 분석을 백엔드 없이 지원하지 않는 이유는 기술적 한계가 
 ## 테스트
 
 ```bash
-cd backend && uv run pytest tests/ -q      # 288 passed
+cd backend && uv run pytest tests/ -q      # 314 passed
 ```
 
 ### 설정
