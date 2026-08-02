@@ -921,6 +921,21 @@ def analyze_sector(
         raise HTTPException(404, str(exc)) from exc
 
 
+@router.get("/leadership/{market}", response_model=ReportOut)
+def leadership(market: str):
+    """섹터 주도권·순환.
+
+    AI 키 없이도 전부 보입니다 -- 숫자는 이 엔드포인트가 원본이고, AI 는 같은
+    dict 를 문장으로 옮길 뿐입니다. 순열검정 400회가 들어 있어 첫 호출은
+    0.5초 안팎 걸리며, 결과는 데이터 지문으로 캐시됩니다.
+    """
+    _require_market(market)
+    try:
+        return ReportOut(report=reports.leadership_report(market.upper()))
+    except LookupError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/analyze/market/{market}", response_model=ReportOut)
 def analyze_market(market: str):
     """시장 전체 현황 + 규칙에 걸린 주목 종목."""

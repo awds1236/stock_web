@@ -110,6 +110,26 @@ def run_market_analysis(market: str) -> LogEntry:
     )
 
 
+def run_rotation_analysis(market: str) -> LogEntry:
+    """섹터 주도권·순환. 시장 분석과 **분리한** 이유는 근거의 성격이 달라서입니다.
+
+    시장 분석은 관측된 현황을 서술합니다. 주도권 분석은 거기에 더해 "다음은
+    어디인가"라는 추론을 다루므로, 통과해야 할 검증(지속성 측정, 다중검정 보정)이
+    따로 있습니다. 한 프롬프트에 섞으면 근거 강도가 다른 문장들이 같은 어조로
+    나열되고, 사용자는 어디까지가 사실인지 구분할 수 없게 됩니다.
+    """
+    market = market.upper()
+    report = reports.leadership_report(market)
+    return _run(
+        kind="rotation",
+        market=market,
+        subject=market,
+        subject_label="한국 섹터 주도권" if market == "KR" else "미국 섹터 주도권",
+        facts=report,
+        user_prompt=prompts.rotation_prompt(report),
+    )
+
+
 def _run(
     *,
     kind: str,

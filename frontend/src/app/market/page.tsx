@@ -2,7 +2,8 @@
 
 import { AIAnalysisCard } from "@/components/AIAnalysisCard";
 import { Freshness, QuoteCell } from "@/components/Freshness";
-import { api, pct, type MarketReport } from "@/lib/api";
+import { LeadershipPanel } from "@/components/LeadershipPanel";
+import { api, pct, type Leadership, type MarketReport } from "@/lib/api";
 import { groupLabel } from "@/lib/sectorNames";
 import { usePolling } from "@/lib/useBackend";
 import { useQuotes } from "@/lib/useQuotes";
@@ -22,6 +23,10 @@ const REPORT_POLL_MS = 300_000;
 export default function MarketPage() {
   const [market, setMarket] = useState("US");
   const [report, setReport] = useState<MarketReport | null>(null);
+  // 주도권 분석은 시장 리포트와 **따로** 불러옵니다. 순열검정이 들어 있어
+  // 조금 느리고, 실패해도 시장 화면 전체가 죽으면 안 되기 때문입니다.
+  const [lead, setLead] = useState<Leadership | null>(null);
+  const [leadError, setLeadError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -30,11 +35,24 @@ export default function MarketPage() {
     async (clear = true) => {
       setBusy(true);
       setError(null);
-      if (clear) setReport(null);
+      if (clear) {
+        setReport(null);
+        setLead(null);
+      }
       try {
         const r = await api.analyzeMarket(market);
         setReport(r.report);
         setUpdatedAt(Date.now());
+        api
+          .leadership(market)
+          .then((l) => {
+            setLead(l.report);
+            setLeadError(null);
+          })
+          .catch((e) => {
+            setLead(null);
+            setLeadError(e instanceof Error ? e.message : String(e));
+          });
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       } finally {
@@ -224,6 +242,17 @@ export default function MarketPage() {
             </div>
           </div>
 
+          {lead ? (
+            <LeadershipPanel data={lead} />
+          ) : (
+            leadError && (
+              <div className="banner warn">
+                <strong>섹터 주도권 분석을 불러오지 못했습니다</strong>
+                {leadError}
+              </div>
+            )
+          )}
+
           <h3>AI 서술 분석</h3>
           <AIAnalysisCard
             title={`${market === "KR" ? "한국" : "미국"} 시장 — AI 종합 분석`}
@@ -231,6 +260,15 @@ export default function MarketPage() {
             run={() => api.aiAnalyzeMarket(market)}
             historyQuery={{ kind: "market", market, subject: market }}
           />
+
+          {lead && (
+            <AIAnalysisCard
+              title={`${market === "KR" ? "한국" : "미국"} — AI 섹터 주도권·순환 분석`}
+              subject="섹터 주도권"
+              run={() => api.aiAnalyzeRotation(market)}
+              historyQuery={{ kind: "rotation", market, subject: market }}
+            />
+          )}
         </>
       )}
     </>

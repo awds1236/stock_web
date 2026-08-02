@@ -169,6 +169,8 @@ def main() -> int:
         dump(f"/api/watchlist/{market}", f"watchlist-{market}.json", required=False)
         dump(f"/api/analyze/market/{market}", f"analysis-market-{market}.json",
              required=False)
+        # 섹터 주도권·순환. 정적 배포에서도 AI 키 없이 숫자가 전부 보여야 합니다.
+        dump(f"/api/leadership/{market}", f"leadership-{market}.json", required=False)
         for row in sectors or []:
             name = row["sector"]
             dump(

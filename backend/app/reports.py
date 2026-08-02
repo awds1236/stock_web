@@ -24,6 +24,7 @@ from app.indicators import levels as lv
 from app.indicators import price as px
 from app.indicators import zones as zn
 from app.plan import scaled_plan
+from app.predict import leadership as lead
 from app.predict import sectors as sec
 from app.store import Store, get_store
 
@@ -67,8 +68,27 @@ def load_panel(market: str, store: Store) -> pd.DataFrame:
     return panel
 
 
+# 선행-후행 행렬 캐시.
+#
+# 순열검정 400회는 한 번에 0.1~0.5초입니다. 업종 리포트마다 다시 돌리면 정적
+# 배포에서 (업종 수 × 시장 수) 만큼 반복되어 수십 초가 됩니다. 결과는 유니버스
+# 전체에 대한 하나의 행렬이므로 시장당 한 번만 계산하면 됩니다.
+_LEADLAG_CACHE: dict[tuple, tuple[tuple, dict]] = {}
+
+
 def clear_panel_cache() -> None:
     _PANEL_CACHE.clear()
+    _LEADLAG_CACHE.clear()
+
+
+def cached_lead_lag(market: str, panel: pd.DataFrame, level: str, stamp: tuple) -> dict:
+    key = (market, level)
+    hit = _LEADLAG_CACHE.get(key)
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    out = lead.lead_lag(panel, group_col=level)
+    _LEADLAG_CACHE[key] = (stamp, out)
+    return out
 
 
 def _split_ends(ranked: list, k: int) -> tuple[list, list]:
@@ -499,10 +519,23 @@ def sector_report(
     )
     leaders, laggards = _split_ends(ranked, 5)
 
+    # 이 업종의 국면. 업종도 종목과 같은 판정을 받습니다 -- 업종 수익률만 보면
+    # "왜 지금 이런가"를 알 수 없고, 추세인지 반등인지에 따라 해석이 갈립니다.
+    my_index = mine[["date", "ret"]].dropna()
+    regime = _sector_regime(my_index)
+
+    # 이 업종을 선행하는 업종 / 이 업종이 선행하는 업종. 유니버스 전체에 대해
+    # 한 번 계산한 행렬(다중검정 보정 포함)에서 이 업종 몫만 잘라냅니다.
+    ll = cached_lead_lag(market, panel, level, store.stamp(market))
+    neighbours = _lead_lag_neighbours(ll, sector)
+
     return {
         "market": market,
         "level": level,
         "sector": sector,
+        "regime": regime,
+        "lead_lag": neighbours,
+        "concentration": _sector_concentration(ranked),
         "as_of": str(pd.Timestamp(panel["date"].max()).date()),
         "ret_20d": _cum(mine["ret"].tail(20)),
         "ret_60d": _cum(mine["ret"].tail(60)),
@@ -520,7 +553,76 @@ def sector_report(
             "업종 재분류가 있었다면 과거 집계가 실제와 다릅니다.",
             "breadth(상승 종목 비율)가 0.5 미만이면 업종 수익률이 소수 종목에 "
             "끌려간 것이므로 업종 전체의 강세로 읽으면 안 됩니다.",
+            "선행-후행 관계는 순열검정으로 다중검정을 보정한 뒤의 결과입니다. "
+            "'유의하지 않음'은 관계가 없다는 뜻이 아니라 이 데이터로는 구분할 수 "
+            "없다는 뜻이며, 상관은 인과가 아닙니다.",
         ],
+    }
+
+
+def _sector_regime(ret_series: pd.DataFrame) -> dict[str, Any]:
+    """업종 지수를 만들어 종목과 **같은 국면 판정**을 돌립니다.
+
+    지표 코드를 두 벌 유지하지 않기 위해서입니다. 업종에는 고가·저가가 없으므로
+    종가와 같은 값을 넣습니다 -- ATR 은 그만큼 좁게 나오며(전일 종가 대비
+    변동만 반영), 그 사실을 caveat 에 적습니다.
+    """
+    if ret_series is None or len(ret_series) < 60:
+        return {"trend": {"label": "판정 불가", "basis": "업종 시계열이 짧습니다"},
+                "volatility": {"label": "판정 불가"}, "range_position": None,
+                "summary": None}
+    close = 100.0 * (1 + ret_series["ret"].fillna(0.0)).cumprod()
+    frame = pd.DataFrame(
+        {"date": ret_series["date"].to_numpy(), "close": close.to_numpy(),
+         "high": close.to_numpy(), "low": close.to_numpy()}
+    )
+    out = _regime(frame)
+    out["caveat"] = (
+        "업종 지수는 구성종목 동일가중 누적수익률입니다. 고가·저가가 없어 ATR 이 "
+        "종목보다 좁게 나오므로, ATR 배수를 종목과 직접 비교하지 마십시오."
+    )
+    return out
+
+
+def _lead_lag_neighbours(ll: dict, sector: str) -> dict[str, Any]:
+    """이 업종을 선행하는 업종 / 이 업종이 선행하는 업종."""
+    if not ll.get("available"):
+        return {"available": False, "reason": ll.get("reason") or ll.get("verdict"),
+                "led_by": [], "leads": []}
+    pairs = ll.get("pairs", [])
+    return {
+        "available": True,
+        "lag_weeks": ll.get("lag_weeks"),
+        "significance_threshold": ll.get("significance_threshold"),
+        "led_by": [p for p in pairs if p["follower"] == sector][:3],
+        "leads": [p for p in pairs if p["leader"] == sector][:3],
+        "verdict": ll.get("verdict"),
+        "note": (
+            "유니버스 전체 순서쌍에 대해 한 번에 보정한 결과에서 이 업종 몫만 "
+            "잘라낸 것입니다. significant=false 면 문턱을 넘지 못한 상관입니다."
+        ),
+    }
+
+
+def _sector_concentration(ranked: list[dict]) -> dict[str, Any]:
+    """업종 상승이 몇 종목 때문인가. breadth 와 다른 각도의 같은 질문입니다."""
+    vals = [r["ret_20d"] for r in ranked if r.get("ret_20d") is not None]
+    if len(vals) < 4:
+        return {"available": False, "reason": "구성종목이 적어 집중도를 볼 수 없습니다."}
+    arr = np.array(vals, dtype=float)
+    k = max(1, len(arr) // 5)  # 상위 20%
+    rest = np.sort(arr)[:-k]
+    return {
+        "available": True,
+        "mean_ret_20d": _f(float(arr.mean())),
+        "top_mean_ret_20d": _f(float(np.sort(arr)[-k:].mean())),
+        "ex_top_ret_20d": _f(float(rest.mean())) if len(rest) else None,
+        "top_k": int(k),
+        "n": int(len(arr)),
+        "note": (
+            "상위 20% 종목을 빼고도 업종 수익률이 남는지 봅니다. 크게 줄면 "
+            "업종 전체의 강세가 아니라 소수 종목의 강세입니다."
+        ),
     }
 
 
@@ -565,11 +667,7 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
         reverse=True,
     )
 
-    level = (
-        "industry"
-        if "industry" in panel.columns and panel["industry"].notna().any()
-        else "sector"
-    )
+    level = _level_of(panel)
     sectors: list[dict] = []
     if level in panel.columns and panel[level].notna().any():
         agg = sec.aggregate_to_sector(panel, group_col=level)
@@ -596,6 +694,9 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
             "ret_120d": _mean(universe_returns(panel, window=120)),
         },
         "internals": stats,
+        # 평균 수익률만으로는 '몇 종목이 끌었는가'와 '종목 선택이 통하는 장인가'를
+        # 알 수 없습니다. 집중도·분산·평균상관을 함께 냅니다.
+        "regime": _market_regime(panel),
         "sectors_top": sectors_top,
         "sectors_bottom": sectors_bottom,
         "level": level,
@@ -610,6 +711,124 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
             "주목 종목은 매수 추천이 아니라 규칙에 걸린 관찰 후보입니다.",
         ],
     }
+
+
+def _level_of(panel: pd.DataFrame) -> str:
+    """세분류가 있으면 세분류로, 없으면 대분류로. 여러 곳에서 같은 판단을 씁니다."""
+    if "industry" in panel.columns and panel["industry"].notna().any():
+        return "industry"
+    return "sector"
+
+
+# ── 섹터 주도권 · 순환 ────────────────────────────────────────────────────
+def leadership_report(
+    market: str, *, store: Store | None = None, level: str | None = None
+) -> dict[str, Any]:
+    """"지금 무엇이 이끌고, 다음은 어디인가".
+
+    세 층을 따로 계산해 따로 보여줍니다 (`app/predict/leadership.py` 참고):
+    관측(주도 업종) / 이 데이터에서의 지속성 측정 / 다중검정 보정 후의 선행-후행.
+    마지막 층이 비면 순환 후보도 비웁니다 -- 근거가 없을 때 후보를 만들지
+    않는 것이 이 기능의 핵심입니다.
+    """
+    store = store or get_store()
+    market = market.upper()
+    panel = load_panel(market, store)
+    if panel.empty:
+        raise LookupError(f"{market} 데이터가 없습니다. 먼저 수집하십시오.")
+    lv_col = level or _level_of(panel)
+    if lv_col not in panel.columns or panel[lv_col].isna().all():
+        raise LookupError(f"{market} 의 업종 정보가 없습니다. 데이터를 다시 수집하십시오.")
+
+    now = lead.leaders(panel, group_col=lv_col)
+    persist = lead.persistence(panel, group_col=lv_col)
+    ll = cached_lead_lag(market, panel, lv_col, store.stamp(market))
+    rotation = lead.rotation_candidates(now, persist, ll)
+
+    return {
+        "market": market,
+        "level": lv_col,
+        "as_of": str(pd.Timestamp(panel["date"].max()).date()),
+        "n_universe": int(panel["ticker"].nunique()),
+        "leaders": now,
+        "persistence": persist,
+        "lead_lag": ll,
+        "rotation": rotation,
+        "market_regime": _market_regime(panel),
+        "caveats": [
+            "'주도 업종'은 관측이지만 '다음 업종'은 추론입니다. 두 층의 근거 강도가 "
+            "다르며, 화면은 그것을 분리해 보여줍니다.",
+            "지속성 측정은 인샘플이고 거래비용이 없습니다. 문헌(Moskowitz & "
+            "Grinblatt 1999)에 산업 모멘텀 근거가 있어도 이 유니버스에서 성립한다는 "
+            "보장은 없어 직접 쟀습니다.",
+            "선행-후행은 순열검정으로 다중검정을 보정합니다. 보정 없이 보면 업종 "
+            "30개에서 순서쌍 870개 중 40여 개가 우연히 유의하게 나옵니다.",
+            "상관은 인과가 아닙니다. 유의한 쌍도 금리·환율·유가 같은 공통 요인에 "
+            "대한 반응 속도 차이일 수 있고, 그 요인은 이 앱의 데이터에 없습니다.",
+            "업종 분류는 현재 시점 분류를 과거에 적용한 것입니다.",
+        ],
+    }
+
+
+def _market_regime(panel: pd.DataFrame) -> dict[str, Any]:
+    """시장 전체의 국면 -- 평균 수익률이 못 보여주는 것들.
+
+    셋을 더 봅니다:
+
+        집중도  상위 5종목을 빼면 시장 수익률이 얼마나 남는가. 지수가 소수
+                종목에 끌려가는 국면인지 아닌지가 여기서 갈립니다.
+        분산    종목 간 20일 수익률의 표준편차. 낮으면 무엇을 골라도 비슷하고,
+                높으면 종목 선택이 결과를 좌우합니다.
+        평균상관 60일 일간수익률의 평균 쌍상관. 높으면 위험 온/오프 장세이고,
+                업종·종목 분산이 잘 듣지 않습니다.
+    """
+    out: dict[str, Any] = {
+        "concentration": None, "dispersion_20d": None, "avg_pair_correlation_60d": None,
+        "summary": None,
+    }
+    rets20 = universe_returns(panel, window=20)
+    if len(rets20) >= 6:
+        vals = np.array(list(rets20.values()), dtype=float)
+        top5 = np.sort(vals)[-5:]
+        without = np.delete(vals, np.argsort(vals)[-5:])
+        out["concentration"] = {
+            "market_ret_20d": _f(float(vals.mean())),
+            "ex_top5_ret_20d": _f(float(without.mean())) if len(without) else None,
+            "top5_mean_ret_20d": _f(float(top5.mean())),
+            "n": len(vals),
+        }
+        out["dispersion_20d"] = _f(float(vals.std(ddof=1)))
+
+    # 평균 쌍상관: 상관행렬의 비대각 평균. 종목이 많으면 표본을 잘라 씁니다.
+    wide = panel.pivot_table(index="date", columns="ticker", values="close")
+    daily = wide.sort_index().pct_change().tail(60)
+    daily = daily.loc[:, daily.notna().sum() >= 40]
+    if daily.shape[1] >= 5 and len(daily) >= 20:
+        m = daily.fillna(0.0).to_numpy(dtype=float)
+        c = np.corrcoef(m, rowvar=False)
+        iu = np.triu_indices_from(c, k=1)
+        vals = c[iu]
+        vals = vals[np.isfinite(vals)]
+        if len(vals):
+            out["avg_pair_correlation_60d"] = _f(float(vals.mean()))
+
+    parts = []
+    conc = out["concentration"]
+    if conc and conc["ex_top5_ret_20d"] is not None:
+        gap = conc["market_ret_20d"] - conc["ex_top5_ret_20d"]
+        parts.append(
+            f"상위 5종목을 빼면 20일 수익률이 {gap * 100:+.2f}%p 달라집니다"
+        )
+    if out["avg_pair_correlation_60d"] is not None:
+        c = out["avg_pair_correlation_60d"]
+        label = "높음 (동조화)" if c > 0.5 else ("낮음 (분화)" if c < 0.25 else "보통")
+        parts.append(f"평균 쌍상관 {c:.2f} — {label}")
+    out["summary"] = " · ".join(parts) if parts else None
+    out["caveat"] = (
+        "동일가중 유니버스 기준입니다. 공식 지수는 시총가중이라 집중도 해석이 "
+        "다를 수 있습니다."
+    )
+    return out
 
 
 def _market_internals(panel: pd.DataFrame) -> dict[str, float | None]:

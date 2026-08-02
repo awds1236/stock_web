@@ -221,6 +221,74 @@ export default function SectorsPage() {
                 </div>
               </div>
 
+              {/* 국면 · 집중도 · 선행후행. 업종 수익률만 보면 "왜 지금 이런가"와
+                  "이 강세가 얼마나 넓은가"를 알 수 없습니다. */}
+              <div className="grid grid-2">
+                <div className="card">
+                  <strong>업종 국면</strong>
+                  <div style={{ marginTop: 6 }}>
+                    {detail.regime?.summary ?? "판정 불가"}
+                  </div>
+                  <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                    {detail.regime?.trend?.basis}
+                  </div>
+                  {detail.concentration?.available && (
+                    <div style={{ marginTop: 8, fontSize: 13 }}>
+                      상위 {detail.concentration.top_k}종목을 빼면 20일 수익률이{" "}
+                      <strong className={cls(detail.concentration.ex_top_ret_20d)}>
+                        {pct(detail.concentration.ex_top_ret_20d)}
+                      </strong>{" "}
+                      <span className="muted">
+                        (전체 {pct(detail.concentration.mean_ret_20d)})
+                      </span>
+                    </div>
+                  )}
+                  {detail.regime?.caveat && (
+                    <div className="caveat">{detail.regime.caveat}</div>
+                  )}
+                </div>
+
+                <div className="card">
+                  <strong>선행 · 후행 관계</strong>
+                  {detail.lead_lag?.available ? (
+                    <>
+                      {detail.lead_lag.led_by.length === 0 &&
+                      detail.lead_lag.leads.length === 0 ? (
+                        <div className="muted" style={{ marginTop: 6 }}>
+                          이 업종과 얽힌 상위 쌍이 없습니다.
+                        </div>
+                      ) : (
+                        <ul style={{ margin: "6px 0 0", paddingLeft: 18, fontSize: 13 }}>
+                          {detail.lead_lag.led_by.map((p) => (
+                            <li key={`in-${p.leader}`}>
+                              <strong>{p.leader}</strong> 가 이 업종을 선행 (r=
+                              {p.corr.toFixed(2)}){" "}
+                              <span className={p.significant ? "pos" : "muted"}>
+                                {p.significant ? "보정 후 유의" : "문턱 미달"}
+                              </span>
+                            </li>
+                          ))}
+                          {detail.lead_lag.leads.map((p) => (
+                            <li key={`out-${p.follower}`}>
+                              이 업종이 <strong>{p.follower}</strong> 를 선행 (r=
+                              {p.corr.toFixed(2)}){" "}
+                              <span className={p.significant ? "pos" : "muted"}>
+                                {p.significant ? "보정 후 유의" : "문턱 미달"}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="caveat">{detail.lead_lag.note}</div>
+                    </>
+                  ) : (
+                    <div className="muted" style={{ marginTop: 6 }}>
+                      {detail.lead_lag?.reason ?? "선행-후행을 계산할 수 없습니다."}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <div className="card">
                 {detail.caveats.map((c) => (
                   <div className="caveat" key={c}>

@@ -356,6 +356,97 @@ Barber & Odean (2000, JF) — 거래가 잦은 계좌일수록 수익률이 낮�
 
 ---
 
+## 3-D. 섹터 주도권과 순환 — "다음은 어디인가"에 답할 자격
+
+이것은 이 앱에서 **가장 지어내기 쉬운 답**입니다. "다음 주도 섹터"를 물으면
+사람들은 확신에 찬 답을 기대하고, 언어모델은 학습된 서사(금리가 내리면
+성장주로 …)를 기꺼이 꺼냅니다. 그 서사는 이 앱의 데이터에 근거가 없고 검증할
+수도 없습니다.
+
+그래서 이 기능은 **세 개의 층으로 쪼개고 층마다 다른 검증을 요구**합니다.
+화면(`/market`)과 프롬프트 모두 층에 `[관측] [측정] [추론]` 배지를 답니다.
+
+### 1층 — 지금 누가 이끄는가 (관측)
+
+초과수익만으로 고르면 대형주 한둘이 끌어올린 업종이 '주도 업종'이 됩니다.
+그래서 세 축을 나란히 냅니다.
+
+| 축 | 무엇을 잡아내는가 |
+|---|---|
+| `excess_20d` | 시장(유니버스 동일가중) 대비 초과수익 |
+| `breadth` | 상승 종목 비율 |
+| `participation_20d` | 구성종목 중 **시장을 이긴** 종목 비율 |
+
+`leadership_score` 는 세 축의 z 점수 평균이며 **검증된 지표가 아닙니다** —
+정렬용 편의 수치입니다. breadth 나 참여율이 0.5 미만이면 화면이 "소수 종목이
+끌어올린 주도"라고 표시합니다.
+
+장세의 성격도 함께 봅니다: 상위 5종목을 뺀 수익률(집중도), 종목 간 20일 수익률
+표준편차(분산), 60일 평균 쌍상관. 평균상관이 높으면 동조화 장세라 업종·종목
+분산이 잘 듣지 않습니다.
+
+### 2층 — 주도권은 이어지는가 (이 데이터에서 측정)
+
+Moskowitz & Grinblatt (1999, JF) 은 산업 모멘텀이 개별 종목 모멘텀의 상당
+부분을 설명한다고 보고했습니다. 그러나 **"문헌에 있으니 여기서도 된다"고 넘기지
+않습니다.** 수집된 유니버스에서 직접 잽니다:
+
+* 21거래일 간격의 **겹치지 않는** 시점마다 직전 20일 초과수익으로 업종을 정렬
+* 이후 21일 초과수익과 비교 → 스피어만 순위상관(rank IC)
+* 기간별 IC 의 평균과 t 값, 상위 1/3 − 하위 1/3 스프레드
+
+겹치는 구간을 쓰면 t 값이 부풀려지므로 잘라서 씁니다. |t| < 2 면 화면과 AI 가
+**"이 데이터에서는 이어진다는 증거가 없습니다"** 라고 씁니다. 인샘플이고
+거래비용이 없다는 점도 함께 표시합니다.
+
+### 3층 — 무엇이 무엇을 선행했는가 (다중검정 보정 후)
+
+근거가 되는 문헌:
+
+* **Hong, Torous & Valkanov (2007, JFE)** — 일부 산업이 시장을 최대 2개월
+  선행합니다. 정보가 천천히 퍼진다는 가설입니다.
+* **Menzly & Ozbas (2010, JF)**, **Cohen & Frazzini (2008, JF)** — 공급-수요로
+  엮인 산업이 서로의 수익률을 예측합니다. "관련 섹터"라는 말에 실체를 주는
+  연구들입니다.
+* **Rapach, Strauss, Tu & Zhou (2019, Management Science)** — 산업 간 수익률
+  예측을 기계학습으로 다룬 후속 연구.
+
+문제는 **다중검정**입니다. 업종이 30개면 순서쌍이 870개이고, 아무 관계가 없어도
+그중 40여 개가 p<0.05 로 나옵니다. 그래서:
+
+* 주간(5거래일) **비중첩** 수익률로 교차상관을 계산합니다. 일간은 비동기
+  거래와 마이크로구조 잡음이 선행성 아닌 것을 선행성으로 만듭니다.
+* 예측 측 행렬을 시간축으로 **순환 이동**시킨 400회 순열에서 최대 |상관| 의
+  귀무분포를 만들고, 그 95백분위를 문턱으로 씁니다. 각 업종의 자기상관과 업종
+  간 동시점 상관은 보존한 채 선행-후행 정렬만 깨는 방법입니다.
+* 문턱을 넘지 못한 쌍은 화면에 "문턱 미달"로 표시되고 근거로 쓰이지 않습니다.
+
+테스트가 이것을 강제합니다: 관계를 심지 않은 합성 패널 6개에서 유의 판정이
+**0건**이어야 하고, 심은 관계(반도체 → 자동차)는 1위로 찾아내야 합니다
+(`tests/test_leadership.py`).
+
+### 순환 후보 — 비어 있을 수 있어야 합니다
+
+후보는 두 조건을 모두 통과할 때에만 만들어집니다: (1) 선행-후행 쌍이 보정을
+통과했고, (2) 그 후행 업종이 아직 덜 움직였을 것(초과수익이 중앙값 이하).
+하나라도 실패하면 목록은 비고, 화면은 **왜 비었는지**를 문장으로 씁니다.
+
+> "이 데이터로는 '다음 주도 업종'을 말할 근거가 없습니다. 없는 근거를 지어내는
+> 대신 비워 둡니다."
+
+이 빈 분기가 실제로 동작하는 것이 이 기능의 핵심입니다. 후보가 나올 때도
+서술은 조건문입니다 — "오를 업종"이 아니라 "과거에 시차 관계가 있었고 아직 덜
+움직인 업종"입니다.
+
+### 남는 한계
+
+* **상관은 인과가 아닙니다.** 유의한 쌍도 금리·환율·유가 같은 공통 요인에 대한
+  반응 속도 차이일 수 있고, 그 요인은 이 앱의 데이터에 없습니다.
+* 업종 분류는 현재 시점 기준을 과거에 적용한 것입니다.
+* 유니버스가 시총 상위로 제한되어 있어 업종 대표성이 완전하지 않습니다.
+
+---
+
 ## 4. 검증 방법론 — 이 앱이 신뢰를 주장하는 근거
 
 지표 선택보다 **검증 방법이 결과를 더 크게 좌우합니다**.
@@ -627,6 +718,14 @@ P6이 이 앱에서 수급의 위상을 최종 결정합니다. 개선이 없으
 - Moreira, A. & Muir, T. (2017) — [Volatility-Managed Portfolios (Journal of Finance 72-4)](https://onlinelibrary.wiley.com/doi/10.1111/jofi.12513)
 - Harvey, C. 외 (2018) — [The Impact of Volatility Targeting (SSRN)](https://papers.ssrn.com/sol3/papers.cfm?abstract_id=3175538)
 - Bollerslev, T. (1986) — [Generalized Autoregressive Conditional Heteroskedasticity (Journal of Econometrics 31-3)](https://www.sciencedirect.com/science/article/abs/pii/0304407686900631) — 변동성 군집. 국면 백분위와 확률 계산의 전제
+
+섹터 주도권·순환 (§3-D):
+- Moskowitz, T. & Grinblatt, M. (1999) — [Do Industries Explain Momentum? (Journal of Finance 54-4)](https://onlinelibrary.wiley.com/doi/10.1111/0022-1082.00146) — 산업 모멘텀이 개별 종목 모멘텀의 상당 부분을 설명
+- Hong, H., Torous, W. & Valkanov, R. (2007) — [Do Industries Lead Stock Markets? (Journal of Financial Economics 83-2)](https://www.sciencedirect.com/science/article/abs/pii/S0304405X06001474) — 일부 산업이 시장을 최대 2개월 선행
+- Menzly, L. & Ozbas, O. (2010) — [Market Segmentation and Cross-Predictability of Returns (Journal of Finance 65-4)](https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2010.01578.x) — 공급-수요로 엮인 산업의 상호 예측력
+- Cohen, L. & Frazzini, A. (2008) — [Economic Links and Predictable Returns (Journal of Finance 63-4)](https://onlinelibrary.wiley.com/doi/10.1111/j.1540-6261.2008.01379.x)
+- Rapach, D., Strauss, J., Tu, J. & Zhou, G. (2019) — [Industry Return Predictability: A Machine Learning Approach (Journal of Financial Data Science)](https://jfds.pm-research.com/content/1/3/9) — 산업 간 예측을 기계학습으로
+- Lo, A. & MacKinlay, A. (1990) — [When Are Contrarian Profits Due to Stock Market Overreaction? (Review of Financial Studies 3-2)](https://academic.oup.com/rfs/article/3/2/175/1585437) — 시차 교차상관의 고전
 
 미국 시장:
 - [Information Propagation Across Investor Types: Korean Equity Market — 한국의 종목별 투자자 유형 공시가 예외적임을 서술](https://arxiv.org/pdf/2603.20271)

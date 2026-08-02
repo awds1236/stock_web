@@ -389,6 +389,28 @@ export type SectorReport = {
   laggards: TickerLine[];
   market_ret_20d: number | null;
   peer_sectors: SectorRow[];
+  regime: Regime & { caveat?: string };
+  lead_lag: {
+    available: boolean;
+    reason?: string | null;
+    lag_weeks?: number;
+    significance_threshold?: number;
+    led_by: LeadLagPair[];
+    leads: LeadLagPair[];
+    verdict?: string;
+    note?: string;
+  };
+  concentration:
+    | { available: false; reason: string }
+    | {
+        available: true;
+        mean_ret_20d: number | null;
+        top_mean_ret_20d: number | null;
+        ex_top_ret_20d: number | null;
+        top_k: number;
+        n: number;
+        note: string;
+      };
   caveats: string[];
 };
 
@@ -415,6 +437,7 @@ export type MarketReport = {
     median_vol_20d: number | null;
     n_evaluated: number;
   };
+  regime: MarketRegime;
   sectors_top: SectorRow[];
   sectors_bottom: SectorRow[];
   level: string;
@@ -422,6 +445,102 @@ export type MarketReport = {
   movers_down: TickerLine[];
   attention: AttentionItem[];
   rules: string[];
+  caveats: string[];
+};
+
+/** 평균 수익률이 못 보여주는 것 — 소수 종목이 끌었는가, 종목 선택이 통하는가. */
+export type MarketRegime = {
+  concentration: {
+    market_ret_20d: number | null;
+    ex_top5_ret_20d: number | null;
+    top5_mean_ret_20d: number | null;
+    n: number;
+  } | null;
+  dispersion_20d: number | null;
+  avg_pair_correlation_60d: number | null;
+  summary: string | null;
+  caveat?: string;
+};
+
+export type LeaderRow = {
+  sector: string;
+  ret_5d: number | null;
+  ret_20d: number | null;
+  ret_60d: number | null;
+  excess_5d: number | null;
+  excess_20d: number | null;
+  excess_60d: number | null;
+  breadth: number | null;
+  participation_20d: number | null;
+  n_constituents: number;
+  leadership_score: number | null;
+};
+
+export type LeadLagPair = {
+  leader: string;
+  follower: string;
+  corr: number;
+  significant: boolean;
+};
+
+/** 섹터 주도권·순환. 세 층의 근거 강도가 다르므로 화면도 따로 보여줍니다. */
+export type Leadership = {
+  market: string;
+  level: string;
+  as_of: string;
+  n_universe: number;
+  leaders:
+    | { available: false; reason: string }
+    | {
+        available: true;
+        as_of: string;
+        n_sectors: number;
+        leading: LeaderRow[];
+        lagging: LeaderRow[];
+        score_note: string;
+      };
+  persistence: {
+    available: boolean;
+    reason?: string;
+    lookback_days: number;
+    horizon_days: number;
+    n_periods?: number;
+    rank_ic?: number | null;
+    t_stat?: number | null;
+    top_minus_bottom?: number | null;
+    verdict?: string;
+    caveat?: string;
+  };
+  lead_lag: {
+    available: boolean;
+    reason?: string;
+    lag_weeks: number;
+    n_weeks?: number;
+    n_sectors?: number;
+    n_pairs_tested?: number;
+    significance_threshold?: number;
+    n_significant?: number;
+    pairs?: LeadLagPair[];
+    method?: string;
+    verdict?: string;
+    caveat?: string;
+  };
+  rotation: {
+    available: boolean;
+    reason: string | null;
+    candidates: {
+      sector: string;
+      led_by: string;
+      corr: number;
+      direction: string;
+      excess_20d: number | null;
+      condition: string;
+    }[];
+    persistence_verdict?: string;
+    how_to_read?: string;
+    what_this_means?: string;
+  };
+  market_regime: MarketRegime;
   caveats: string[];
 };
 
@@ -714,6 +833,12 @@ export const api = {
       () => staticFile(`analysis-market-${market}.json`),
       "시장 분석",
     ),
+  leadership: (market: string) =>
+    read<{ report: Leadership }>(
+      () => req(`/api/leadership/${market}`),
+      () => staticFile(`leadership-${market}.json`),
+      "섹터 주도권",
+    ),
 
   // ── 현재가 ──────────────────────────────────────────────────────────
   // 백엔드가 있으면 백엔드가, 없으면 브라우저가 직접 시세 소스를 호출합니다
@@ -742,6 +867,10 @@ export const api = {
   aiAnalyzeMarket: (market: string) =>
     write<AILog>(() =>
       req(`/api/ai/analyze/market/${market}`, { method: "POST" }),
+    ),
+  aiAnalyzeRotation: (market: string) =>
+    write<AILog>(() =>
+      req(`/api/ai/analyze/rotation/${market}`, { method: "POST" }),
     ),
   aiLogs: (params: { kind?: string; market?: string; subject?: string } = {}) =>
     write<AILog[]>(() => {

@@ -23,13 +23,15 @@ import pandas as pd
 
 from app.store import Store, get_store
 
-LogKind = Literal["stock", "sector", "market"]
+# rotation = 섹터 주도권·순환. market 과 나눈 이유는 근거의 성격이 다르기
+# 때문입니다 (관측 vs 추론) -- app/ai/service.py 의 run_rotation_analysis 참고.
+LogKind = Literal["stock", "sector", "market", "rotation"]
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ai_logs (
     id                VARCHAR PRIMARY KEY,
     created_at        TIMESTAMP NOT NULL,
-    kind              VARCHAR NOT NULL,   -- stock | sector | market
+    kind              VARCHAR NOT NULL,   -- stock | sector | market | rotation
     market            VARCHAR NOT NULL,
     subject           VARCHAR NOT NULL,   -- 종목코드 | 업종명 | 시장코드
     subject_label     VARCHAR,            -- 화면에 보여줄 이름

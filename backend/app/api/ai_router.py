@@ -21,6 +21,7 @@ from app.ai.logs import get_ai_logs
 from app.ai.service import (
     ai_available,
     run_market_analysis,
+    run_rotation_analysis,
     run_sector_analysis,
     run_stock_analysis,
 )
@@ -99,9 +100,16 @@ def analyze_market(market: str) -> LogOut:
     return _run(lambda: run_market_analysis(market))
 
 
+@router.post("/analyze/rotation/{market}", response_model=LogOut)
+def analyze_rotation(market: str) -> LogOut:
+    """섹터 주도권·순환. 시장 분석과 별도 버튼인 이유는 근거의 성격이 달라서입니다."""
+    _require_market(market)
+    return _run(lambda: run_rotation_analysis(market))
+
+
 @router.get("/logs", response_model=list[LogOut])
 def list_logs(
-    kind: str | None = Query(None, pattern="^(stock|sector|market)$"),
+    kind: str | None = Query(None, pattern="^(stock|sector|market|rotation)$"),
     market: str | None = None,
     subject: str | None = None,
     limit: int = Query(50, ge=1, le=200),

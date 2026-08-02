@@ -209,6 +209,46 @@ class TestPrompts:
         text = prompts.market_prompt({"market": "KR", "attention": []})
         assert "새로 추가하지" in text
 
+    def test_market_prompt_asks_about_concentration_and_correlation(self):
+        """평균 수익률만 서술하면 '몇 종목이 끌었는가'가 사라집니다."""
+        text = prompts.market_prompt({"market": "KR"})
+        assert "concentration" in text
+        assert "avg_pair_correlation_60d" in text
+        assert "동조화" in text
+
+    def test_rotation_prompt_separates_evidence_tiers(self):
+        """관측·측정·추론을 섞으면 사용자가 어디까지가 사실인지 모릅니다."""
+        text = prompts.rotation_prompt({"market": "KR"})
+        assert "(관측)" in text and "(측정)" in text and "(추론)" in text
+        for section in ("## 지금 시장을 이끄는 업종", "## 이 주도권은 이어지는가",
+                        "## 관련 업종 — 무엇이 무엇을 선행했는가",
+                        "## 앞으로 주목받을 수 있는 업종",
+                        "## 반대 해석", "## 이 분석의 한계"):
+            assert section in text, f"{section} 절이 빠졌습니다"
+
+    def test_rotation_prompt_requires_reporting_an_empty_result(self):
+        """근거가 없을 때 비우는 것이 이 기능의 핵심입니다. 프롬프트가 강제해야 합니다."""
+        text = prompts.rotation_prompt({"market": "US"})
+        assert "하나도 없으면 없다고" in text
+        assert "다른 근거로 후보를 만들지 마십시오" in text
+        assert "n_significant 가 0 이면" in text
+
+    def test_rotation_prompt_forbids_overriding_the_measurement(self):
+        """문헌에 산업 모멘텀이 있다고 측정값을 덮어쓰면 안 됩니다."""
+        text = prompts.rotation_prompt({"market": "KR"})
+        assert "t 값이 2 미만이면" in text
+        assert "측정값을 덮어쓰지" in text
+
+    def test_rotation_prompt_demands_breadth_next_to_leadership(self):
+        text = prompts.rotation_prompt({"market": "KR"})
+        assert "breadth·participation_20d 를 반드시" in text
+        assert "소수 종목이 끌어올린 주도" in text
+
+    def test_sector_prompt_flags_insignificant_lead_lag(self):
+        text = prompts.sector_prompt({"market": "KR", "sector": "반도체"})
+        assert "significant 가 false 인 쌍" in text
+        assert "## 이 업종의 선행·후행 관계" in text
+
 
 # ── 로그 저장소 ───────────────────────────────────────────────────────────
 @pytest.fixture
