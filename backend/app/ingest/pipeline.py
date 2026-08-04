@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pandas as pd
 
@@ -21,6 +21,8 @@ from app.providers.base import ProviderError
 from app.store import Store, get_store
 
 log = logging.getLogger(__name__)
+
+KST = timezone(timedelta(hours=9))
 
 # 기본 미국 유니버스. 인증키 없이 즉시 동작하는 경로를 만들기 위한 것이며,
 # 실제 분석에서는 지수 구성종목으로 교체해야 합니다.
@@ -99,6 +101,53 @@ def limit_to_top_market_cap(
 
     filtered = panel[panel["ticker"].isin(keep)]
     return filtered, len(keep)
+
+
+# 한국은 **시장별로 따로** 자릅니다.
+#
+# 시총 상위 300 을 통째로 뽑으면 거의 전부 코스피가 됩니다 -- 코스닥 1위의
+# 시총이 코스피 100위권과 겹치는 정도라, 코스닥은 몇 종목만 남거나 아예
+# 사라집니다. 그러면 "코스닥 시장 분석"이 성립하지 않고, 업종 집계도 코스피
+# 대형주 이야기만 하게 됩니다.
+#
+# 200/100 으로 나눈 이유: 코스피 200 은 KOSPI200 지수와 같은 규모라 익숙하고,
+# 코스닥은 100 종목이면 업종 집계에 필요한 최소한을 확보하면서도 하루 거래대금이
+# 몇 억 미만인 종목까지 내려가지 않습니다.
+KR_BOARD_LIMITS = {"KOSPI": 200, "KOSDAQ": 100}
+
+
+def limit_per_board(
+    panel: pd.DataFrame, limits: dict[str, int] | None = None
+) -> tuple[pd.DataFrame, dict[str, int]]:
+    """시장(코스피/코스닥)별로 시총 상위 N 종목만 남깁니다.
+
+    `board` 컬럼이 없거나 전부 결측이면 전체에 합계 상한을 적용해 물러섭니다 --
+    구분을 못 하는 상황에서 임의로 한쪽에 몰아주는 것보다 낫습니다.
+
+    Returns:
+        (필터된 패널, {시장: 남은 종목 수})
+    """
+    limits = limits or KR_BOARD_LIMITS
+    if panel.empty:
+        return panel, {}
+    if "board" not in panel.columns or panel["board"].isna().all():
+        filtered, kept = limit_to_top_market_cap(panel, sum(limits.values()))
+        return filtered, {"(구분 없음)": kept}
+
+    keep: set[str] = set()
+    counts: dict[str, int] = {}
+    for board, limit in limits.items():
+        part = panel[panel["board"] == board]
+        if part.empty:
+            counts[board] = 0
+            continue
+        selected, n = limit_to_top_market_cap(part, limit)
+        keep |= set(selected["ticker"].unique())
+        counts[board] = n
+    if not keep:
+        filtered, kept = limit_to_top_market_cap(panel, sum(limits.values()))
+        return filtered, {"(구분 없음)": kept}
+    return panel[panel["ticker"].isin(keep)], counts
 
 
 def ingest_us_prices(
@@ -341,6 +390,32 @@ def _kr_trading_days(start: date, end: date) -> list[date]:
     return days
 
 
+# KRX Open API 는 일별 데이터를 **매일 08:00 KST 에 갱신**합니다. 즉 T일 시세는
+# T+1일 08:00 이후에야 조회됩니다. 장 마감(15:30 KST) 직후에 물어도 그날 데이터는
+# 없습니다.
+KRX_PUBLISH_HOUR_KST = 8
+
+
+def kr_latest_available(now_utc: datetime | None = None) -> date:
+    """지금 시점에 KRX 에서 받을 수 있는 **가장 최근 거래일**.
+
+    이걸 계산하지 않으면 매 실행마다 아직 존재하지 않는 날짜를 물어 호출을
+    버리게 되고, 무엇보다 "왜 최신 일자가 어제인가"가 코드 어디에도 적혀 있지
+    않게 됩니다.
+
+    규칙: D일 데이터는 D+1일 08:00 KST 부터. 따라서 지금이 08:00 KST 이후면
+    직전 영업일까지, 그 전이면 하나 더 과거까지가 상한입니다. 공휴일은 여기서
+    다루지 않습니다 -- 휴장일은 KRX 가 빈 응답을 주고, 그 응답도 캐시됩니다.
+    """
+    now = (now_utc or datetime.now(UTC)).astimezone(KST)
+    cutoff = now.date() if now.hour >= KRX_PUBLISH_HOUR_KST else now.date() - timedelta(days=1)
+    # cutoff 당일 08:00 기준으로 '어제까지' 공개돼 있습니다.
+    day = cutoff - timedelta(days=1)
+    while day.weekday() >= 5:  # 토·일은 애초에 거래일이 아닙니다
+        day -= timedelta(days=1)
+    return day
+
+
 def _kr_stored_dates(store: Store) -> set[date]:
     with store.cursor() as con:
         rows = con.execute("SELECT DISTINCT date FROM prices WHERE market = 'KR'").fetchall()
@@ -354,7 +429,7 @@ def ingest_kr_prices(
     max_days_per_run: int = KR_MAX_DAYS_PER_RUN,
     refetch_recent_days: int = 5,
     store: Store | None = None,
-    limit: int = DEFAULT_UNIVERSE_LIMIT,
+    board_limits: dict[str, int] | None = None,
 ) -> IngestResult:
     """한국 시세 수집 (KRX Open API, **인증키 필요**).
 
@@ -367,9 +442,15 @@ def ingest_kr_prices(
             구간은 다음 실행이 이어받습니다.
         refetch_recent_days: 최근 며칠은 이미 있어도 다시 받습니다. 장 마감
             직후 데이터가 나중에 정정되는 경우가 있어서입니다.
+        board_limits: 시장별 종목 수 상한. 기본 {"KOSPI": 200, "KOSDAQ": 100}.
 
-    KRX 는 전 종목(2,700+)을 한 번에 주므로, 저장 **전에** 시총 상위 `limit`
-    종목으로 줄입니다. 저장 후 걸러내면 DB 가 이미 비대해진 뒤라 의미가 없습니다.
+    KRX 는 전 종목(2,700+)을 한 번에 주므로, 저장 **전에** 줄입니다. 저장 후
+    걸러내면 DB 가 이미 비대해진 뒤라 의미가 없습니다.
+
+    **당일 데이터는 받을 수 없습니다.** KRX Open API 는 일별 데이터를 매일 오전
+    8시(KST)에 갱신하므로, T일 시세는 T+1일 08:00 이후에야 조회됩니다. 장 마감
+    직후(15:30) 실행하면 그날 데이터는 아직 없고 전 영업일까지만 들어옵니다 --
+    화면의 "최신 일자"가 하루 뒤처져 보이는 것은 이 때문이며, 버그가 아닙니다.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -380,7 +461,9 @@ def ingest_kr_prices(
     provider = KrxOpenApiPriceProvider()
 
     warnings: list[str] = []
-    end = date.today()
+    # 오늘 날짜로 물으면 반드시 빈 응답입니다 (KRX 는 T+1 08:00 KST 갱신).
+    # 상한을 실제로 받을 수 있는 날로 낮춰 호출을 버리지 않습니다.
+    end = kr_latest_available()
     start = (
         end - timedelta(days=days)
         if days is not None
@@ -438,23 +521,37 @@ def ingest_kr_prices(
 
     all_df = pd.concat(frames, ignore_index=True)
 
+    # provider 는 코스피/코스닥 구분을 `market` 컬럼에 담아 옵니다. 저장 스키마의
+    # `market` 은 국가(KR/US)이므로 여기서 `board` 로 옮깁니다. 이걸 빼먹어서
+    # 지금까지 코스피·코스닥 구분이 저장 단계에서 통째로 버려졌습니다.
+    if "board" not in all_df.columns and "market" in all_df.columns:
+        all_df = all_df.rename(columns={"market": "board"})
+
     # 유니버스는 **한 번 정해지면 유지합니다.**
     #
     # 히스토리를 여러 번에 나눠 받으므로, 매 실행마다 그 배치의 최신일 시총으로
     # 상위 N을 다시 뽑으면 실행마다 종목 집합이 달라집니다. 그러면 종목별
     # 시계열에 구멍이 생기고(어떤 구간에만 존재), 그 구멍은 지표를 조용히
     # 틀리게 만듭니다. 이미 저장된 종목이 있으면 그 목록을 따릅니다.
-    existing = set(store.universe("KR")["ticker"]) if not store.universe("KR").empty else set()
+    stored = store.universe("KR")
+    existing = set(stored["ticker"]) if not stored.empty else set()
     total_tickers = int(all_df["ticker"].nunique())
     if existing:
         all_df = all_df[all_df["ticker"].isin(existing)]
         kept = int(all_df["ticker"].nunique())
+        by_board = (
+            all_df.groupby("board")["ticker"].nunique().to_dict()
+            if "board" in all_df.columns
+            else {}
+        )
     else:
-        all_df, kept = limit_to_top_market_cap(all_df, limit)
+        all_df, by_board = limit_per_board(all_df, board_limits)
+        kept = int(all_df["ticker"].nunique())
     if kept < total_tickers:
+        split = " / ".join(f"{b} {n}종목" for b, n in sorted(by_board.items())) or f"{kept}종목"
         warnings.append(
-            f"전체 {total_tickers:,}종목 중 시총 상위 {kept}종목만 유지했습니다. "
-            + UNIVERSE_LIMIT_CAVEAT
+            f"전체 {total_tickers:,}종목 중 시총 상위 {split} ({kept}종목)만 "
+            "유지했습니다. " + UNIVERSE_LIMIT_CAVEAT
         )
     if all_df.empty:
         return IngestResult("KR", "prices", 0, 0, None, None,

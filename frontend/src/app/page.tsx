@@ -2,6 +2,7 @@
 
 import { api, type Coverage } from "@/lib/api";
 import { HAS_SNAPSHOTS } from "@/lib/backend";
+import { boardLabel } from "@/lib/sectorNames";
 import { useBackend, usePolling, useRelativeTime } from "@/lib/useBackend";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -172,7 +173,17 @@ export default function Home() {
               <tbody>
                 <tr>
                   <td className="muted">종목 수</td>
-                  <td className="num">{c.n_tickers.toLocaleString()}</td>
+                  <td className="num">
+                    {c.n_tickers.toLocaleString()}
+                    {/* "300종목"만 보여주면 코스닥이 몇 개인지 알 수 없습니다. */}
+                    {Object.keys(c.boards ?? {}).length > 0 && (
+                      <div className="muted" style={{ fontSize: 11 }}>
+                        {Object.entries(c.boards)
+                          .map(([b, n]) => `${boardLabel(b)} ${n}`)
+                          .join(" · ")}
+                      </div>
+                    )}
+                  </td>
                 </tr>
                 <tr>
                   <td className="muted">거래일 수</td>
@@ -195,6 +206,9 @@ export default function Home() {
 
             {/* 히스토리가 짧아 못 쓰는 기능이 있으면 **미리** 말합니다.
                 빈 화면만 보면 사용자는 앱이 고장난 줄 압니다. */}
+            {c.latency_note && (
+              <div className="caveat">{c.latency_note}</div>
+            )}
             {c.history_note && (
               <div className="banner warn" style={{ marginTop: 10 }}>
                 <strong>히스토리가 짧습니다</strong>

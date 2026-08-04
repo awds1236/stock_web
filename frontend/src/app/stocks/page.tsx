@@ -13,7 +13,7 @@ import {
   type StockDetail,
   type UniverseItem,
 } from "@/lib/api";
-import { industryLabel, sectorLabel } from "@/lib/sectorNames";
+import { boardLabel, industryLabel, sectorLabel } from "@/lib/sectorNames";
 import { usePolling } from "@/lib/useBackend";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -33,6 +33,8 @@ const DETAIL_POLL_MS = 300_000;
 
 export default function StocksPage() {
   const [market, setMarket] = useState("US");
+  // 코스피/코스닥. 한국에서만 의미가 있고, 미국에서는 선택기 자체를 숨깁니다.
+  const [board, setBoard] = useState<string>("");
   const [universe, setUniverse] = useState<UniverseItem[]>([]);
   // 지금 담긴 유니버스가 **어느 시장의 것인지**. 시장을 바꾼 직후에는 아직
   // 이전 시장의 종목이 선택되어 있어, 그대로 조회하면 KR/AAPL 같은 조합이
@@ -66,19 +68,25 @@ export default function StocksPage() {
     setUniverse([]);
     setUniverseMarket(null);
     api
-      .universe(market)
+      .universe(market, board || undefined)
       .then((u) => {
         setUniverse(u);
         setUniverseMarket(market);
         const preferred = u.find((x) => x.ticker === wanted)?.ticker;
         setTicker(preferred ?? (u.length ? u[0].ticker : null));
-        setError(u.length ? null : "이 시장에 수집된 데이터가 없습니다.");
+        setError(
+          u.length
+            ? null
+            : board
+              ? `${board} 에 수집된 종목이 없습니다.`
+              : "이 시장에 수집된 데이터가 없습니다.",
+        );
       })
       .catch((e) => {
         setTicker(null);
         setError(e instanceof Error ? e.message : String(e));
       });
-  }, [market, wanted]);
+  }, [market, board, wanted]);
 
   // 종목을 고르면 차트·지표는 **자동으로** 불러옵니다. 이건 저장된 데이터를
   // 읽는 값싼 작업이라 버튼 뒤에 둘 이유가 없습니다. 버튼 뒤에 두는 것은
@@ -163,16 +171,39 @@ export default function StocksPage() {
 
       <div className="card">
         <div className="row">
-          <select value={market} onChange={(e) => setMarket(e.target.value)}>
+          <select
+            value={market}
+            onChange={(e) => {
+              setMarket(e.target.value);
+              // 시장을 바꾸면 코스피/코스닥 선택은 뜻을 잃습니다. 남겨두면
+              // 미국으로 옮겼을 때 빈 목록이 나옵니다.
+              setBoard("");
+            }}
+          >
             <option value="US">미국</option>
             <option value="KR">한국</option>
           </select>
+          {market === "KR" && (
+            <select value={board} onChange={(e) => setBoard(e.target.value)}>
+              <option value="">코스피+코스닥</option>
+              <option value="KOSPI">코스피</option>
+              <option value="KOSDAQ">코스닥</option>
+            </select>
+          )}
           <StockSearch market={market} selected={ticker} onSelect={setTicker} />
         </div>
         {universe.length > 0 && (
           <div className="caveat">
-            수집된 {universe.length.toLocaleString()}종목 중에서 검색합니다.
+            {board ? `${boardLabel(board)} ` : ""}
+            {universe.length.toLocaleString()}종목 중에서 검색합니다.
             코드·이름·업종 중 무엇이든 일부만 입력하면 됩니다.
+            {market === "KR" && !board && (
+              <>
+                {" "}한국 유니버스는 <strong>코스피 200 + 코스닥 100</strong> 으로
+                시장별 시총 상위를 따로 뽑습니다 — 합쳐서 자르면 코스닥이 거의
+                남지 않기 때문입니다.
+              </>
+            )}
           </div>
         )}
       </div>
@@ -189,6 +220,9 @@ export default function StocksPage() {
           <h3>
             {detail.name ?? detail.ticker}
             <span className="muted"> · {detail.ticker}</span>
+            {report?.board && (
+              <span className="muted"> · {boardLabel(report.board)}</span>
+            )}
             {detail.industry ? (
               <span className="muted"> · {industryLabel(detail.industry)}</span>
             ) : detail.sector ? (

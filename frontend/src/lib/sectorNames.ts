@@ -112,3 +112,10 @@ export function groupLabel(
 ): string {
   return level === "industry" ? industryLabel(value) : sectorLabel(value);
 }
+
+
+/** 코스피 / 코스닥 표기. 저장값은 영문이고 화면은 한글이라 한 곳에서 옮깁니다. */
+export function boardLabel(board: string | null | undefined) {
+  if (!board) return "";
+  return board === "KOSPI" ? "코스피" : board === "KOSDAQ" ? "코스닥" : board;
+}

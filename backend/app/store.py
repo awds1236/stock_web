@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS prices (
     ticker      VARCHAR NOT NULL,
     date        DATE     NOT NULL,
     name        VARCHAR,
+    board       VARCHAR,     -- KOSPI | KOSDAQ (한국). 미국은 NULL
     sector      VARCHAR,
     industry    VARCHAR,
     open        DOUBLE,
@@ -114,6 +115,9 @@ class Store:
         # IF NOT EXISTS 는 기존 테이블을 바꾸지 않으므로, 여기서 명시적으로
         # 추가합니다. 이걸 빼먹으면 업그레이드한 사용자만 INSERT 가 깨집니다.
         conn.execute("ALTER TABLE prices ADD COLUMN IF NOT EXISTS industry VARCHAR")
+        # 코스피/코스닥 구분. 기존 DB(캐시로 이어받는 CI 포함)에는 없으므로
+        # 여기서 추가합니다 -- 빼먹으면 업그레이드한 쪽만 INSERT 가 깨집니다.
+        conn.execute("ALTER TABLE prices ADD COLUMN IF NOT EXISTS board VARCHAR")
         self._conn = conn
         return conn
 
@@ -235,6 +239,7 @@ class Store:
                 """
                 SELECT ticker,
                        any_value(name)   AS name,
+                       any_value(board)  AS board,
                        any_value(sector) AS sector,
                        any_value(industry) AS industry,
                        min(date)         AS first_date,
@@ -276,8 +281,8 @@ class Store:
 
 
 PRICE_COLUMNS = [
-    "market", "ticker", "date", "name", "sector", "industry", "open", "high", "low",
-    "close", "volume", "value", "market_cap", "shares", "is_delisted",
+    "market", "ticker", "date", "name", "board", "sector", "industry", "open",
+    "high", "low", "close", "volume", "value", "market_cap", "shares", "is_delisted",
 ]
 FLOW_COLUMNS = [
     "market", "ticker", "date", "investor_type",

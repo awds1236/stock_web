@@ -19,11 +19,17 @@ export type Coverage = {
   needs_credential: string | null;
   n_days: number;
   history_note: string | null;
+  /** 코스피/코스닥별 종목 수. 한국만 채워집니다. */
+  boards: Record<string, number>;
+  /** 소스가 구조적으로 늦는 이유. "왜 어제까지만 나오나"에 대한 답. */
+  latency_note: string | null;
 };
 
 export type UniverseItem = {
   ticker: string;
   name: string | null;
+  /** KOSPI | KOSDAQ (한국). 미국은 null. */
+  board: string | null;
   sector: string | null;
   industry: string | null;
   first_date: string;
@@ -178,6 +184,7 @@ export type StockReport = {
   market: string;
   ticker: string;
   name: string | null;
+  board: string | null;
   sector: string | null;
   industry: string | null;
   as_of: string;
@@ -437,6 +444,7 @@ export type MarketReport = {
     median_vol_20d: number | null;
     n_evaluated: number;
   };
+  boards: BoardRow[];
   regime: MarketRegime;
   sectors_top: SectorRow[];
   sectors_bottom: SectorRow[];
@@ -446,6 +454,19 @@ export type MarketReport = {
   attention: AttentionItem[];
   rules: string[];
   caveats: string[];
+};
+
+/** 코스피/코스닥은 다른 시장입니다. 합치면 대형주 위주의 코스피가 지배합니다. */
+export type BoardRow = {
+  board: string;
+  n_tickers: number;
+  ret_1d: number | null;
+  ret_5d: number | null;
+  ret_20d: number | null;
+  ret_60d: number | null;
+  above_sma60_pct: number | null;
+  near_52w_high_pct: number | null;
+  median_vol_20d: number | null;
 };
 
 /** 평균 수익률이 못 보여주는 것 — 소수 종목이 끌었는가, 종목 선택이 통하는가. */
@@ -720,12 +741,16 @@ export const api = {
       () => staticFile("coverage.json"),
       "데이터 현황",
     ),
-  universe: (market: string) =>
-    read<UniverseItem[]>(
+  // board 필터는 **정적 모드에서도** 동작해야 하므로 클라이언트에서 거릅니다.
+  // 시장별 스냅샷 파일을 따로 굽는 것보다 파일 수와 빌드 시간이 적게 듭니다.
+  universe: async (market: string, board?: string) => {
+    const all = await read<UniverseItem[]>(
       () => req(`/api/universe/${market}`),
       () => staticFile(`universe-${market}.json`),
       `${market} 종목 목록`,
-    ),
+    );
+    return board ? all.filter((u) => u.board === board) : all;
+  },
   stock: (market: string, ticker: string) =>
     read<StockDetail>(
       () => req(`/api/stocks/${market}/${ticker}`),

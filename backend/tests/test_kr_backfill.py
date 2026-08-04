@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import pandas as pd
 import pytest
@@ -42,19 +42,22 @@ class FakeProvider:
             raise ProviderError("모의 실패")
         if trade_date in self.empty_on:
             return pd.DataFrame()
+        # 실제 provider 와 같은 모양: 코스피/코스닥 구분을 `market` 컬럼에 담아
+        # 옵니다 (저장 스키마의 market 은 국가라 ingest 가 board 로 옮깁니다).
         return pd.DataFrame(
             {
-                "date": [trade_date, trade_date],
-                "ticker": ["005930", "000660"],
-                "name": ["삼성전자", "SK하이닉스"],
-                "open": [100.0, 200.0],
-                "high": [101.0, 202.0],
-                "low": [99.0, 198.0],
-                "close": [100.5, 201.0],
-                "volume": [1000.0, 2000.0],
-                "value": [1e8, 2e8],
-                "market_cap": [1e12, 5e11],
-                "shares": [1e7, 1e7],
+                "date": [trade_date] * 4,
+                "ticker": ["005930", "000660", "247540", "086520"],
+                "name": ["삼성전자", "SK하이닉스", "에코프로비엠", "에코프로"],
+                "market": ["KOSPI", "KOSPI", "KOSDAQ", "KOSDAQ"],
+                "open": [100.0, 200.0, 50.0, 40.0],
+                "high": [101.0, 202.0, 51.0, 41.0],
+                "low": [99.0, 198.0, 49.0, 39.0],
+                "close": [100.5, 201.0, 50.5, 40.5],
+                "volume": [1000.0, 2000.0, 500.0, 400.0],
+                "value": [1e8, 2e8, 5e7, 4e7],
+                "market_cap": [1e12, 5e11, 3e11, 2e11],
+                "shares": [1e7, 1e7, 1e7, 1e7],
             }
         )
 
@@ -152,12 +155,52 @@ class TestIncremental:
 class TestUniverseStability:
     def test_universe_is_fixed_after_the_first_run(self, store, provider, no_classification):
         """실행마다 상위 N을 다시 뽑으면 종목별 시계열에 구멍이 생깁니다."""
-        pipeline.ingest_kr_prices(days=20, store=store, limit=1)
+        limits = {"KOSPI": 1, "KOSDAQ": 1}
+        pipeline.ingest_kr_prices(days=20, store=store, board_limits=limits)
         first = set(store.universe("KR")["ticker"])
-        assert len(first) == 1
+        assert len(first) == 2  # 시장마다 1종목씩
 
-        pipeline.ingest_kr_prices(days=60, store=store, limit=1)
+        pipeline.ingest_kr_prices(days=60, store=store, board_limits=limits)
         assert set(store.universe("KR")["ticker"]) == first
+
+
+class TestBoardSplit:
+    """코스피/코스닥을 나눠 담고, 시장별로 상한을 적용합니다.
+
+    합쳐서 상위 N 을 뽑으면 코스닥이 거의 남지 않습니다 -- 코스닥 1위의 시총이
+    코스피 100위권과 겹치는 정도이기 때문입니다. 그러면 "코스닥 분석"이라는
+    화면이 성립하지 않습니다.
+    """
+
+    def test_board_is_stored_not_discarded(self, store, provider, no_classification):
+        pipeline.ingest_kr_prices(days=20, store=store)
+        universe = store.universe("KR")
+        assert set(universe["board"]) == {"KOSPI", "KOSDAQ"}
+
+    def test_market_column_stays_the_country_code(self, store, provider, no_classification):
+        """provider 의 market(코스피/코스닥)이 저장 스키마의 market(국가)을
+        덮어쓰면 시장 필터가 통째로 깨집니다."""
+        pipeline.ingest_kr_prices(days=20, store=store)
+        assert set(store.prices("KR")["market"]) == {"KR"}
+
+    def test_limits_apply_per_board(self, store, provider, no_classification):
+        pipeline.ingest_kr_prices(
+            days=20, store=store, board_limits={"KOSPI": 1, "KOSDAQ": 2}
+        )
+        counts = store.universe("KR").groupby("board")["ticker"].nunique().to_dict()
+        assert counts == {"KOSPI": 1, "KOSDAQ": 2}
+
+    def test_warning_reports_the_split(self, store, provider, no_classification):
+        """"300종목"만 알려주면 코스닥이 몇 개인지 알 수 없습니다."""
+        res = pipeline.ingest_kr_prices(
+            days=20, store=store, board_limits={"KOSPI": 1, "KOSDAQ": 1}
+        )
+        joined = " ".join(res.warnings)
+        assert "KOSPI 1종목" in joined and "KOSDAQ 1종목" in joined
+
+    def test_default_limits_are_200_and_100(self):
+        assert pipeline.KR_BOARD_LIMITS == {"KOSPI": 200, "KOSDAQ": 100}
+        assert sum(pipeline.KR_BOARD_LIMITS.values()) == 300
 
 
 class TestFailureHandling:
@@ -237,3 +280,100 @@ class TestClassificationResilience:
         out = pipeline.fetch_kr_classification(date(2026, 7, 31))
         assert not out.empty, "이전 영업일로 물러나 재시도해야 합니다"
         assert out.iloc[0]["industry"] == "반도체"
+
+
+class TestLimitPerBoard:
+    """`limit_per_board` 단위 검사 -- 물러서는 경로까지."""
+
+    @staticmethod
+    def _panel(rows):
+        return pd.DataFrame(
+            [
+                {
+                    "date": date(2025, 1, 2),
+                    "ticker": t,
+                    "board": b,
+                    "market_cap": cap,
+                    "value": cap / 100,
+                    "close": 100.0,
+                }
+                for t, b, cap in rows
+            ]
+        )
+
+    def test_keeps_the_largest_in_each_board(self):
+        panel = self._panel([
+            ("A", "KOSPI", 9e12), ("B", "KOSPI", 8e12), ("C", "KOSPI", 1e12),
+            ("D", "KOSDAQ", 3e11), ("E", "KOSDAQ", 2e11),
+        ])
+        out, counts = pipeline.limit_per_board(panel, {"KOSPI": 2, "KOSDAQ": 1})
+        assert set(out["ticker"]) == {"A", "B", "D"}
+        assert counts == {"KOSPI": 2, "KOSDAQ": 1}
+
+    def test_a_small_board_is_not_crowded_out_by_a_large_one(self):
+        """이것이 시장별로 나눈 이유입니다. 합쳐서 자르면 코스닥이 사라집니다."""
+        panel = self._panel(
+            [(f"K{i}", "KOSPI", 1e13 - i) for i in range(10)]
+            + [(f"Q{i}", "KOSDAQ", 1e10 - i) for i in range(10)]
+        )
+        merged, _ = pipeline.limit_to_top_market_cap(panel, 10)
+        assert not any(t.startswith("Q") for t in merged["ticker"]), (
+            "합산 상한에서는 코스닥이 전부 밀려납니다"
+        )
+        split, counts = pipeline.limit_per_board(panel, {"KOSPI": 5, "KOSDAQ": 5})
+        assert counts == {"KOSPI": 5, "KOSDAQ": 5}
+
+    def test_missing_board_falls_back_to_a_combined_cap(self):
+        """구분을 못 하면 한쪽에 몰아주는 대신 합계 상한으로 물러섭니다."""
+        panel = self._panel([("A", "KOSPI", 3.0), ("B", "KOSPI", 2.0)]).drop(
+            columns=["board"]
+        )
+        out, counts = pipeline.limit_per_board(panel, {"KOSPI": 1, "KOSDAQ": 1})
+        assert list(counts) == ["(구분 없음)"]
+        assert out["ticker"].nunique() == 2
+
+    def test_one_empty_board_reports_zero_instead_of_failing(self):
+        panel = self._panel([("A", "KOSPI", 3.0), ("B", "KOSPI", 2.0)])
+        out, counts = pipeline.limit_per_board(panel, {"KOSPI": 1, "KOSDAQ": 50})
+        assert counts == {"KOSPI": 1, "KOSDAQ": 0}
+        assert set(out["ticker"]) == {"A"}
+
+    def test_empty_panel_is_handled(self):
+        out, counts = pipeline.limit_per_board(pd.DataFrame())
+        assert out.empty and counts == {}
+
+
+class TestPublishLatency:
+    """KRX 는 T일 데이터를 T+1일 08:00 KST 에 공개합니다.
+
+    이걸 코드가 모르면 매 실행이 아직 없는 날짜를 물어 호출을 버리고, 무엇보다
+    "왜 최신 일자가 어제인가"가 어디에도 적혀 있지 않게 됩니다. 실제로 배포된
+    화면의 한국 최신 일자가 하루 뒤처져 보인다는 보고가 있었습니다.
+    """
+
+    KST = timezone(timedelta(hours=9))
+
+    def at(self, y, m, d, hh, mm=0):
+        return datetime(y, m, d, hh, mm, tzinfo=self.KST)
+
+    def test_right_after_the_close_today_is_not_available_yet(self):
+        """금요일 16:00 KST -- 장은 끝났지만 그날 데이터는 아직 없습니다."""
+        assert pipeline.kr_latest_available(self.at(2026, 7, 31, 16)) == date(2026, 7, 30)
+
+    def test_before_eight_am_still_lags_one_more_day(self):
+        assert pipeline.kr_latest_available(self.at(2026, 8, 1, 7, 30)) == date(2026, 7, 30)
+
+    def test_after_eight_am_the_previous_session_appears(self):
+        assert pipeline.kr_latest_available(self.at(2026, 8, 1, 8, 30)) == date(2026, 7, 31)
+
+    def test_weekend_walks_back_to_a_weekday(self):
+        """일요일 아침에 물으면 토요일이 아니라 금요일이 상한이어야 합니다."""
+        got = pipeline.kr_latest_available(self.at(2026, 8, 2, 9))
+        assert got == date(2026, 7, 31) and got.weekday() < 5
+
+    def test_ingest_does_not_ask_for_dates_that_cannot_exist(self, store, provider,
+                                                             no_classification):
+        pipeline.ingest_kr_prices(days=10, store=store)
+        assert max(provider.asked) <= pipeline.kr_latest_available(), (
+            "존재할 수 없는 날짜를 물으면 호출 한도만 소모합니다"
+        )

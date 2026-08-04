@@ -179,6 +179,7 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
         "market": market,
         "ticker": ticker,
         "name": _first_valid(g, "name"),
+        "board": _first_valid(g, "board"),
         "sector": sector_name,
         "industry": industry_name,
         "as_of": str(as_of),
@@ -694,6 +695,10 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
             "ret_120d": _mean(universe_returns(panel, window=120)),
         },
         "internals": stats,
+        # 코스피와 코스닥은 다른 시장입니다. 하나로 평균 내면 대형주 위주의
+        # 코스피가 결과를 지배해, 코스닥이 반대로 움직여도 화면에 드러나지
+        # 않습니다. 같은 지표를 시장별로 따로 냅니다.
+        "boards": _board_breakdown(panel),
         # 평균 수익률만으로는 '몇 종목이 끌었는가'와 '종목 선택이 통하는 장인가'를
         # 알 수 없습니다. 집중도·분산·평균상관을 함께 냅니다.
         "regime": _market_regime(panel),
@@ -768,6 +773,36 @@ def leadership_report(
             "업종 분류는 현재 시점 분류를 과거에 적용한 것입니다.",
         ],
     }
+
+
+def _board_breakdown(panel: pd.DataFrame) -> list[dict]:
+    """코스피 / 코스닥을 따로.
+
+    한국에서 이 둘을 합쳐 평균 내면 코스피 대형주가 결과를 지배합니다 --
+    코스닥이 반대 방향으로 움직여도 합산 수치에는 거의 나타나지 않습니다.
+    미국은 `board` 가 비어 있어 빈 목록이 돌아갑니다.
+    """
+    if "board" not in panel.columns or panel["board"].isna().all():
+        return []
+    out: list[dict] = []
+    for board, part in panel.groupby("board", sort=True):
+        if part.empty:
+            continue
+        stats = _market_internals(part)
+        out.append(
+            {
+                "board": str(board),
+                "n_tickers": int(part["ticker"].nunique()),
+                "ret_1d": _mean(universe_returns(part, window=1)),
+                "ret_5d": _mean(universe_returns(part, window=5)),
+                "ret_20d": _mean(universe_returns(part, window=20)),
+                "ret_60d": _mean(universe_returns(part, window=60)),
+                "above_sma60_pct": stats["above_sma60_pct"],
+                "near_52w_high_pct": stats["near_52w_high_pct"],
+                "median_vol_20d": stats["median_vol_20d"],
+            }
+        )
+    return sorted(out, key=lambda r: -r["n_tickers"])
 
 
 def _market_regime(panel: pd.DataFrame) -> dict[str, Any]:

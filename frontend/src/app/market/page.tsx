@@ -4,7 +4,7 @@ import { AIAnalysisCard } from "@/components/AIAnalysisCard";
 import { Freshness, QuoteCell } from "@/components/Freshness";
 import { LeadershipPanel } from "@/components/LeadershipPanel";
 import { api, pct, type Leadership, type MarketReport } from "@/lib/api";
-import { groupLabel } from "@/lib/sectorNames";
+import { boardLabel, groupLabel } from "@/lib/sectorNames";
 import { usePolling } from "@/lib/useBackend";
 import { useQuotes } from "@/lib/useQuotes";
 import Link from "next/link";
@@ -151,6 +151,52 @@ export default function MarketPage() {
               보이지 않습니다.
             </div>
           </div>
+
+          {report.boards.length > 1 && (
+            <>
+              {/* 코스피와 코스닥은 다른 시장입니다. 합쳐 평균 내면 대형주 위주의
+                  코스피가 결과를 지배해, 코스닥이 반대로 가도 안 보입니다. */}
+              <h3>코스피 · 코스닥</h3>
+              <div className="card">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>시장</th>
+                      <th className="num">종목수</th>
+                      <th className="num">1일</th>
+                      <th className="num">20일</th>
+                      <th className="num">60일</th>
+                      <th className="num">60일선 위</th>
+                      <th className="num">52주 고가 근접</th>
+                      <th className="num">변동성 중앙값</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.boards.map((b) => (
+                      <tr key={b.board}>
+                        <td>
+                          <strong>{boardLabel(b.board)}</strong>
+                        </td>
+                        <td className="num">{b.n_tickers}</td>
+                        <td className={`num ${cls(b.ret_1d)}`}>{pct(b.ret_1d)}</td>
+                        <td className={`num ${cls(b.ret_20d)}`}>{pct(b.ret_20d)}</td>
+                        <td className={`num ${cls(b.ret_60d)}`}>{pct(b.ret_60d)}</td>
+                        <td className="num">{pct(b.above_sma60_pct, 0)}</td>
+                        <td className="num">{pct(b.near_52w_high_pct, 0)}</td>
+                        <td className="num">{pct(b.median_vol_20d, 0)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="caveat">
+                  두 시장을 합친 평균은 시총이 큰 코스피 쪽으로 기웁니다. 코스닥이
+                  반대 방향으로 움직이는 국면에서는 합산 수치만 보면 그 사실이
+                  드러나지 않습니다. 각 시장은 동일가중 평균이며 공식 지수(KOSPI·
+                  KOSDAQ 지수)와 다릅니다.
+                </div>
+              </div>
+            </>
+          )}
 
           <h3>업종 지형</h3>
           <div className="grid grid-2">

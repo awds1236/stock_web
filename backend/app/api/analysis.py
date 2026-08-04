@@ -47,7 +47,26 @@ class CoverageOut(BaseModel):
     # 보여, 왜 장기 지표가 비는지 알 수 없었습니다.
     n_days: int
     history_note: str | None
+    # 코스피/코스닥별 종목 수. 한국만 채워집니다.
+    boards: dict[str, int]
+    # 소스가 구조적으로 늦는 이유. "왜 어제까지만 나오나"에 대한 답입니다.
+    latency_note: str | None
 
+
+# 데이터가 **구조적으로** 늦는 이유. 화면이 이걸 말하지 않으면 사용자는 최신
+# 일자가 어제인 것을 버그로 읽습니다 (실제로 그렇게 보고되었습니다).
+LATENCY_NOTES = {
+    "KR": (
+        "KRX Open API 는 일별 데이터를 **매일 08:00(KST)에 갱신**합니다. 즉 당일 "
+        "시세는 다음 영업일 오전에야 조회할 수 있어, 장 마감 직후에는 최신 일자가 "
+        "전 영업일로 보이는 것이 정상입니다. 장중 가격은 이 스냅샷이 아니라 "
+        "현재가 조회 경로에서 옵니다."
+    ),
+    "US": (
+        "일별 확정 시세는 미국 장 마감(한국시간 다음날 오전) 이후에 반영됩니다. "
+        "장중 가격은 이 스냅샷이 아니라 현재가 조회 경로에서 옵니다."
+    ),
+}
 
 # 화면 기능별로 필요한 거래일 수 (실측 기준).
 DAYS_FOR_LONG_INDICATORS = 252  # 52주 고점·200일선
@@ -57,6 +76,7 @@ DAYS_FOR_FORECAST = 900  # 특성 워밍업 252 + 학습 504 + 검증 126 + 예�
 class UniverseItem(BaseModel):
     ticker: str
     name: str | None
+    board: str | None  # KOSPI | KOSDAQ (한국). 미국은 None
     sector: str | None
     industry: str | None
     first_date: str
@@ -175,9 +195,25 @@ def coverage() -> list[CoverageOut]:
                 ),
                 n_days=n_days,
                 history_note=_history_note(code, n_days) if has_rows else None,
+                boards=_board_counts(code) if has_rows else {},
+                latency_note=LATENCY_NOTES.get(code),
             )
         )
     return out
+
+
+def _board_counts(market: str) -> dict[str, int]:
+    """시장(코스피/코스닥)별 종목 수. 화면이 "300종목"이 아니라 어떻게 나뉘는지
+    보여주기 위한 것입니다."""
+    with get_store().cursor() as con:
+        rows = con.execute(
+            # 개수 내림차순 -- 알파벳순이면 코스닥이 먼저 나와 어색합니다.
+            "SELECT board, count(DISTINCT ticker) FROM prices "
+            "WHERE market = ? AND board IS NOT NULL "
+            "GROUP BY board ORDER BY count(DISTINCT ticker) DESC, board",
+            [market],
+        ).fetchall()
+    return {str(b): int(n) for b, n in rows}
 
 
 def _distinct_days(market: str) -> int:
@@ -216,13 +252,21 @@ def _history_note(market: str, n_days: int) -> str | None:
 
 
 @router.get("/universe/{market}", response_model=list[UniverseItem])
-def universe(market: str) -> list[UniverseItem]:
+def universe(
+    market: str,
+    board: str | None = Query(
+        None, description="KOSPI | KOSDAQ. 한국에서만 의미가 있습니다."
+    ),
+) -> list[UniverseItem]:
     _require_market(market)
     df = get_store().universe(market.upper())
+    if board and "board" in df.columns:
+        df = df[df["board"] == board.upper()]
     return [
         UniverseItem(
             ticker=r["ticker"],
             name=r["name"],
+            board=_s(r.get("board")),
             sector=r["sector"],
             industry=r.get("industry"),
             first_date=str(r["first_date"]),
@@ -231,6 +275,11 @@ def universe(market: str) -> list[UniverseItem]:
         )
         for _, r in df.iterrows()
     ]
+
+
+def _s(v) -> str | None:
+    """NaN 을 None 으로. pandas 의 NaN 이 그대로 나가면 JSON 에 "nan" 이 찍힙니다."""
+    return None if v is None or pd.isna(v) else str(v)
 
 
 # ── 검색 (자동완성) ───────────────────────────────────────────────────────
@@ -1092,7 +1141,7 @@ def ingest(
         res = (
             ingest_us_prices(years=years)
             if market == "US"
-            else ingest_kr_prices(years=years, limit=limit)
+            else ingest_kr_prices(years=years)
         )
     except ProviderError as exc:
         raise HTTPException(409, str(exc)) from exc
