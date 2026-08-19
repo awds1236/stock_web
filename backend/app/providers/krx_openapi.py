@@ -68,7 +68,11 @@ _PRICE_FIELD_MAP = {
     "BAS_DD": "date",
     "ISU_CD": "ticker",
     "ISU_NM": "name",
-    "MKT_NM": "market",
+    # MKT_NM 을 'market' 으로 받으면 안 됩니다. 저장소의 market 은 국가
+    # 단위('KR')이고, 여기 오는 값은 그 안의 시장(KOSPI/KOSDAQ)입니다.
+    # 예전에는 이 값이 저장 직전에 'KR' 로 덮여 사라졌고, 그래서 어떤 종목이
+    # 코스피인지 코스닥인지 앱이 알 방법이 없었습니다.
+    "MKT_NM": "board",
     "TDD_OPNPRC": "open",
     "TDD_HGPRC": "high",
     "TDD_LWPRC": "low",
@@ -215,23 +219,26 @@ class KrxOpenApiPriceProvider(PriceProvider):
         bas_dd = trade_date.strftime("%Y%m%d")
         frames: list[pd.DataFrame] = []
 
-        for name, market in (("stk_bydd_trd", "KOSPI"), ("ksq_bydd_trd", "KOSDAQ")):
+        for name, board in (("stk_bydd_trd", "KOSPI"), ("ksq_bydd_trd", "KOSDAQ")):
             ep = next(e for e in ENDPOINTS if e.name == name)
             payload = self.client.call(ep, {"basDd": bas_dd})
             rows = KrxOpenApiClient.rows_of(payload)
             if not rows:
                 continue
             df = pd.DataFrame(rows).rename(columns=_PRICE_FIELD_MAP)
-            df["market"] = df.get("market", market)
+            # 보드는 **엔드포인트가 곧 답**입니다. 응답의 MKT_NM 은 같은
+            # 유가증권 안에서도 세부 구분('KOSPI글로벌' 등)이 섞여 나올 수
+            # 있는데, 우리가 필요한 건 .KS/.KQ 를 가르는 두 값뿐입니다.
+            df["board"] = board
             frames.append(df)
 
         if not frames:
             return pd.DataFrame(
-                columns=["date", "ticker", "name", "market", *_NUMERIC_COLS]
+                columns=["date", "ticker", "name", "board", *_NUMERIC_COLS]
             )
 
         out = pd.concat(frames, ignore_index=True)
-        keep = ["date", "ticker", "name", "market", *_NUMERIC_COLS]
+        keep = ["date", "ticker", "name", "board", *_NUMERIC_COLS]
         for col in keep:
             if col not in out.columns:
                 out[col] = pd.NA

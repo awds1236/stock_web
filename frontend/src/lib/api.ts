@@ -26,6 +26,8 @@ export type UniverseItem = {
   name: string | null;
   sector: string | null;
   industry: string | null;
+  /** 상장 시장 (KOSPI/KOSDAQ). 한국만 채워집니다. 현재가 심볼 접미사에 씁니다. */
+  board?: string | null;
   first_date: string;
   last_date: string;
   n_days: number;
@@ -61,6 +63,7 @@ export type StockDetail = {
   name: string | null;
   sector: string | null;
   industry: string | null;
+  board?: string | null;
   prices: PricePoint[];
   indicators: { date: string[]; values: Record<string, (number | null)[]> };
   interpretation: Interpretation[];
@@ -80,6 +83,7 @@ export type WatchCandidate = {
   name: string | null;
   sector: string | null;
   industry: string | null;
+  board?: string | null;
   close: number | null;
   ret_20d: number | null;
   pct_from_52w_high: number | null;
@@ -268,6 +272,7 @@ export type AttentionItem = {
   name: string | null;
   sector: string | null;
   industry: string | null;
+  board?: string | null;
   close: number | null;
   ret_20d: number | null;
   pct_from_52w_high: number | null;

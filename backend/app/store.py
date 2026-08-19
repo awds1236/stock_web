@@ -39,6 +39,11 @@ CREATE TABLE IF NOT EXISTS prices (
     name        VARCHAR,
     sector      VARCHAR,
     industry    VARCHAR,
+    -- 상장 시장 구분 (KOSPI / KOSDAQ). market 컬럼과 다릅니다: market 은 국가
+    -- 단위('KR'), board 는 그 안의 시장입니다. 이 구분이 필요한 이유는 두
+    -- 가지입니다 -- 유니버스 상한이 보드별로 다르고(KOSPI 200 / KOSDAQ 50),
+    -- 현재가 소스의 심볼 접미사가 보드마다 다릅니다(.KS / .KQ).
+    board       VARCHAR,
     open        DOUBLE,
     high        DOUBLE,
     low         DOUBLE,
@@ -114,6 +119,7 @@ class Store:
         # IF NOT EXISTS 는 기존 테이블을 바꾸지 않으므로, 여기서 명시적으로
         # 추가합니다. 이걸 빼먹으면 업그레이드한 사용자만 INSERT 가 깨집니다.
         conn.execute("ALTER TABLE prices ADD COLUMN IF NOT EXISTS industry VARCHAR")
+        conn.execute("ALTER TABLE prices ADD COLUMN IF NOT EXISTS board VARCHAR")
         self._conn = conn
         return conn
 
@@ -170,6 +176,34 @@ class Store:
                         f"SELECT {', '.join(FLOW_COLUMNS)} FROM incoming")
             con.unregister("incoming")
         return len(frame)
+
+    def delete_tickers(self, market: str, tickers: list[str]) -> int:
+        """이 시장에서 해당 종목의 시세·수급을 통째로 지웁니다.
+
+        유니버스 상한이 줄었을 때 쓰는 마이그레이션 경로입니다. 상한만 바꾸고
+        저장된 것을 두면, 이미 쌓인 DB(CI 캐시)는 예전 크기를 영원히 유지합니다
+        -- 수집은 '이미 저장된 종목 목록'을 따르기 때문입니다.
+
+        되돌릴 수 없는 삭제이므로 호출자가 목록을 정확히 계산해야 합니다.
+        지운 종목의 히스토리는 다음 수집에서 다시 받아야 합니다.
+        """
+        if not tickers:
+            return 0
+        placeholders = ", ".join("?" * len(tickers))
+        with self.cursor() as con:
+            before = con.execute(
+                f"SELECT count(*) FROM prices WHERE market = ? AND ticker IN ({placeholders})",
+                [market, *tickers],
+            ).fetchone()[0]
+            con.execute(
+                f"DELETE FROM prices WHERE market = ? AND ticker IN ({placeholders})",
+                [market, *tickers],
+            )
+            con.execute(
+                f"DELETE FROM flows WHERE market = ? AND ticker IN ({placeholders})",
+                [market, *tickers],
+            )
+        return int(before)
 
     def log_ingest(self, market: str, kind: str, day: date, rows: int) -> None:
         with self.cursor() as con:
@@ -237,6 +271,10 @@ class Store:
                        any_value(name)   AS name,
                        any_value(sector) AS sector,
                        any_value(industry) AS industry,
+                       -- any_value 가 아니라 max 인 이유: 집계는 NULL 을
+                       -- 건너뛰므로, 보드 컬럼이 생기기 전에 저장된 과거 행이
+                       -- 섞여 있어도 값이 있는 행에서 보드를 얻습니다.
+                       max(board)        AS board,
                        min(date)         AS first_date,
                        max(date)         AS last_date,
                        count(*)          AS n_days
@@ -276,8 +314,8 @@ class Store:
 
 
 PRICE_COLUMNS = [
-    "market", "ticker", "date", "name", "sector", "industry", "open", "high", "low",
-    "close", "volume", "value", "market_cap", "shares", "is_delisted",
+    "market", "ticker", "date", "name", "sector", "industry", "board", "open", "high",
+    "low", "close", "volume", "value", "market_cap", "shares", "is_delisted",
 ]
 FLOW_COLUMNS = [
     "market", "ticker", "date", "investor_type",

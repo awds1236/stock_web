@@ -153,18 +153,61 @@ class TestAnalysisApi:
 
 
 class TestQuote:
+    @pytest.fixture(autouse=True)
+    def offline(self, monkeypatch):
+        """테스트가 외부 시세 소스를 부르지 않게 합니다.
+
+        끄지 않으면 이 클래스의 모든 테스트가 네트워크에 의존하고, 차단된
+        환경에서는 수십 초를 기다렸다 실패합니다. 개별 테스트가 다시
+        monkeypatch 하면 그쪽이 이깁니다.
+        """
+        from app.providers.quote import LiveQuote, clear_quote_cache
+
+        clear_quote_cache()
+        monkeypatch.setattr(
+            "app.providers.quote.fetch_quote",
+            lambda market, ticker, board=None: LiveQuote(
+                None, None, None, "unavailable", "테스트: 외부 호출 없음"
+            ),
+        )
+
     @pytest.fixture
     def kr(self, client, store):
         panel = make_panel(n_days=30, n_tickers=3, seed=1)
         panel["name"] = "테스트"
+        panel["board"] = "KOSPI"
         store.upsert_prices("KR", panel)
         return sorted(panel["ticker"].unique())
 
-    def test_kr_falls_back_to_stored_close_with_reason(self, client, kr):
+    def test_kr_falls_back_to_stored_close_with_reason(self, client, kr, monkeypatch):
+        """한국도 당일 시세를 시도합니다. 실패하면 **이유와 함께** 종가로."""
+        from app.providers.quote import LiveQuote
+
+        monkeypatch.setattr(
+            "app.providers.quote.fetch_quote",
+            lambda market, ticker, board=None: LiveQuote(
+                None, None, None, "unavailable", "소스 차단됨"
+            ),
+        )
         body = client.get(f"/api/quote/KR/{kr[0]}").json()
         assert body["source"] == "stored"
         assert body["price"] is not None
-        assert "장중" in body["note"], "왜 실시간이 아닌지 설명해야 합니다"
+        assert "소스 차단됨" in body["note"], "왜 실시간이 아닌지 설명해야 합니다"
+
+    def test_kr_uses_live_price_when_the_source_answers(self, client, kr, monkeypatch):
+        """예전에는 한국이 조회 자체를 하지 않았습니다 -- 그게 '당일 가격 없음'의 원인."""
+        from app.providers.quote import LiveQuote
+
+        monkeypatch.setattr(
+            "app.providers.quote.fetch_quote",
+            lambda market, ticker, board=None: LiveQuote(
+                71_000.0, 70_000.0, "KRW", "live", "지연 시세"
+            ),
+        )
+        body = client.get(f"/api/quote/KR/{kr[0]}").json()
+        assert body["source"] == "live"
+        assert body["price"] == 71_000.0
+        assert body["currency"] == "KRW"
 
     def test_unknown_ticker_is_404(self, client):
         assert client.get("/api/quote/US/NOPE").status_code == 404
@@ -195,8 +238,10 @@ class TestQuote:
         from app.providers.quote import LiveQuote
 
         monkeypatch.setattr(
-            "app.providers.quote.fetch_us_quote",
-            lambda t: LiveQuote(None, None, None, "unavailable", "차단됨"),
+            "app.providers.quote.fetch_quote",
+            lambda market, ticker, board=None: LiveQuote(
+                None, None, None, "unavailable", "차단됨"
+            ),
         )
         body = client.get("/api/quotes/US?tickers=WINNER").json()
         assert body[0]["source"] == "stored"
@@ -207,8 +252,10 @@ class TestQuote:
         from app.providers.quote import LiveQuote
 
         monkeypatch.setattr(
-            "app.providers.quote.fetch_us_quote",
-            lambda t: LiveQuote(123.0, 100.0, "USD", "live", "지연 시세"),
+            "app.providers.quote.fetch_quote",
+            lambda market, ticker, board=None: LiveQuote(
+                123.0, 100.0, "USD", "live", "지연 시세"
+            ),
         )
         body = client.get("/api/quotes/US?tickers=WINNER").json()
         assert body[0]["source"] == "live"

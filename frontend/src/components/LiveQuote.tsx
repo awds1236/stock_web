@@ -10,19 +10,25 @@ import {
 } from "@/lib/useQuotes";
 import { useMemo, useState } from "react";
 
+/**
+ * 갱신 주기 선택지.
+ *
+ * **1분보다 짧은 선택지는 두지 않습니다.** 예전에는 15초·30초가 있었는데,
+ * 원천이 15분 이상 지연된 시세라 값은 그대로면서 요청만 4배가 됩니다. 무료
+ * 소스가 차단으로 응답하게 만드는 것은 대개 그 빈도입니다.
+ */
 const INTERVALS = [
-  { ms: 15_000, label: "15초" },
-  { ms: 30_000, label: "30초" },
   { ms: 60_000, label: "1분" },
   { ms: 300_000, label: "5분" },
+  { ms: 600_000, label: "10분" },
 ];
 
 /**
  * 종목 상세 상단의 현재가.
  *
- * **실시간이 아니라는 것을 화면에서 숨기지 않습니다.** 무료 소스는 지연
- * 시세이고 한국은 장중 소스가 아예 없습니다. 숫자만 크게 띄우면 사용자는
- * 체결 가격으로 읽습니다 -- 그래서 출처 배지와 설명을 항상 함께 둡니다.
+ * **실시간이 아니라는 것을 화면에서 숨기지 않습니다.** 미국·한국 모두 무료
+ * 소스의 지연 시세이며(15분 이상), 체결 가격이 아닙니다. 숫자만 크게 띄우면
+ * 사용자는 체결 가격으로 읽습니다 -- 그래서 출처 배지와 설명을 항상 함께 둡니다.
  *
  * 값이 시간에 따라 움직이지 않는 경우(스냅샷 종가)에는 **갱신 표시를 아예
  * 다르게** 합니다. "10초 전 갱신"이라고 쓰면 그 값이 10초 전 시세인 것처럼
@@ -31,23 +37,27 @@ const INTERVALS = [
 export function LiveQuote({
   market,
   ticker,
+  /** 상장 시장 (KOSPI/KOSDAQ). 한국 종목의 시세 심볼 접미사를 고릅니다. */
+  board,
   /** 스냅샷에 있는 마지막 종가. 시세 조회가 막혀도 가격 칸이 비지 않게 합니다. */
   fallbackClose,
 }: {
   market: string;
   ticker: string;
+  board?: string | null;
   fallbackClose?: number | null;
 }) {
   const [intervalMs, setIntervalMs] = useState(DEFAULT_QUOTE_INTERVAL_MS);
-  const tickers = useMemo(() => [ticker], [ticker]);
+  const requests = useMemo(() => [{ ticker, board: board ?? null }], [ticker, board]);
   const fallbackCloses = useMemo(
     () => new Map([[ticker, fallbackClose ?? null]]),
     [ticker, fallbackClose],
   );
-  const { quotes, updatedAt, error, loading, refresh } = useQuotes(market, tickers, {
-    intervalMs,
-    fallbackCloses,
-  });
+  const { quotes, updatedAt, error, loading, refresh, cooldownMs } = useQuotes(
+    market,
+    requests,
+    { intervalMs, fallbackCloses },
+  );
   const ago = useRelativeTime(updatedAt);
   const quote = quotes.get(ticker);
 
@@ -115,8 +125,24 @@ export function LiveQuote({
               움직이지 않는 값
             </span>
           )}
-          <button className="ghost tiny" onClick={refresh} disabled={loading}>
-            {loading ? "…" : "새로고침"}
+          {/* 쿨다운 중에는 눌러도 네트워크로 나가지 않습니다(캐시가 돌아옴).
+              버튼을 그대로 두면 "눌렀는데 안 바뀐다"로 읽히므로, 언제 다시
+              부를 수 있는지 버튼에 적습니다. */}
+          <button
+            className="ghost tiny"
+            onClick={refresh}
+            disabled={loading || cooldownMs > 0}
+            title={
+              cooldownMs > 0
+                ? "같은 종목은 1분에 한 번만 조회합니다 (무료 소스 차단 방지)"
+                : "지금 다시 조회"
+            }
+          >
+            {loading
+              ? "…"
+              : cooldownMs > 0
+                ? `${Math.ceil(cooldownMs / 1000)}초 후`
+                : "새로고침"}
           </button>
         </div>
       </div>

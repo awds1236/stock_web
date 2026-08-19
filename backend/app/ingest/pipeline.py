@@ -55,6 +55,20 @@ class IngestResult:
 # 횡단면 모형이 거래가 거의 없는 소형주 노이즈에 지배됩니다.
 DEFAULT_UNIVERSE_LIMIT = 300
 
+# 한국은 **보드별로** 자릅니다: KOSPI 200 / KOSDAQ 50.
+#
+# 왜 하나의 상한(300)으로 두면 안 되는가:
+#   시총으로 한 번에 줄을 세우면 코스닥은 상위 몇 종목만 겨우 들어옵니다.
+#   그런데 코스닥은 코스피와 가격 움직임의 성격이 다르고(변동성·회전율이
+#   높습니다), 몇 종목만 섞여 들어오면 횡단면 모형에는 노이즈로만 남습니다.
+#   보드별로 자르면 두 시장이 각자 의미 있는 표본을 갖습니다.
+#
+#   숫자 자체는 운영 판단입니다 -- 화면에서 고를 수 있는 종목 수와, 1분마다
+#   나가는 조회량·CI 수집 시간의 균형입니다.
+KR_KOSPI_LIMIT = 200
+KR_KOSDAQ_LIMIT = 50
+KR_BOARDS = ("KOSPI", "KOSDAQ")
+
 UNIVERSE_LIMIT_CAVEAT = (
     "유니버스를 **현재** 시가총액 상위 종목으로 제한했습니다. 과거 구간에도 이 "
     "목록을 적용하므로, 그동안 순위 밖으로 밀려났거나 상장폐지된 종목이 빠져 "
@@ -99,6 +113,79 @@ def limit_to_top_market_cap(
 
     filtered = panel[panel["ticker"].isin(keep)]
     return filtered, len(keep)
+
+
+def _board_of(panel: pd.DataFrame) -> dict[str, str]:
+    """종목 -> 보드(KOSPI/KOSDAQ). 보드를 모르는 종목은 빠집니다."""
+    if panel.empty or "board" not in panel.columns:
+        return {}
+    pairs = panel.dropna(subset=["board"])[["ticker", "board"]].drop_duplicates("ticker")
+    return dict(zip(pairs["ticker"], pairs["board"], strict=True))
+
+
+def select_kr_universe(
+    panel: pd.DataFrame,
+    *,
+    kospi_limit: int = KR_KOSPI_LIMIT,
+    kosdaq_limit: int = KR_KOSDAQ_LIMIT,
+) -> tuple[set[str], dict[str, list[str]]]:
+    """이 배치에서 남길 종목 집합과 보드별 내역.
+
+    보드 정보가 아예 없으면(옛 응답 형식·합성 데이터) 두 상한을 합친 하나의
+    풀로 자릅니다. 없는 정보를 근거로 유니버스를 비워버리는 것보다, 예전
+    방식으로 자르고 그 사실이 드러나게 두는 편이 안전합니다 -- 빈 유니버스는
+    화면 전체가 비는 것으로 나타나고 원인을 찾기 어렵습니다.
+    """
+    by_board = kr_top_by_board(
+        panel, kospi_limit=kospi_limit, kosdaq_limit=kosdaq_limit
+    )
+    keep = {t for codes in by_board.values() for t in codes}
+    if keep:
+        return keep, by_board
+
+    fallback, _ = limit_to_top_market_cap(panel, kospi_limit + kosdaq_limit)
+    return set(fallback["ticker"].astype(str)) if not fallback.empty else set(), by_board
+
+
+def kr_top_by_board(
+    panel: pd.DataFrame,
+    *,
+    kospi_limit: int = KR_KOSPI_LIMIT,
+    kosdaq_limit: int = KR_KOSDAQ_LIMIT,
+) -> dict[str, list[str]]:
+    """보드별 시총 상위 종목 코드. `{"KOSPI": [...], "KOSDAQ": [...]}`.
+
+    기준은 패널의 **가장 최근 일자**입니다. `limit_to_top_market_cap` 과 같은
+    생존편향 한계를 그대로 가집니다(UNIVERSE_LIMIT_CAVEAT).
+
+    시총이 비어 있으면 거래대금으로 대체합니다 -- KRX 는 거래정지 종목에
+    시총을 주지 않는 경우가 있고, 그때 임의로 잘라내는 것보다 규모 대용치를
+    쓰는 편이 낫습니다.
+    """
+    out: dict[str, list[str]] = {b: [] for b in KR_BOARDS}
+    if panel.empty or "board" not in panel.columns:
+        return out
+
+    latest = panel["date"].max()
+    snapshot = panel[panel["date"] == latest]
+    limits = {"KOSPI": kospi_limit, "KOSDAQ": kosdaq_limit}
+    for board, limit in limits.items():
+        rows = snapshot[snapshot["board"] == board]
+        if rows.empty:
+            continue
+        by_cap = rows.dropna(subset=["market_cap"])
+        column = "market_cap"
+        if by_cap.empty:
+            by_cap = rows.dropna(subset=["value"])
+            column = "value"
+        if by_cap.empty:
+            continue
+        out[board] = list(
+            by_cap.nlargest(limit, column, keep="first")
+            .head(limit)["ticker"]
+            .astype(str)
+        )
+    return out
 
 
 def ingest_us_prices(
@@ -354,7 +441,8 @@ def ingest_kr_prices(
     max_days_per_run: int = KR_MAX_DAYS_PER_RUN,
     refetch_recent_days: int = 5,
     store: Store | None = None,
-    limit: int = DEFAULT_UNIVERSE_LIMIT,
+    kospi_limit: int = KR_KOSPI_LIMIT,
+    kosdaq_limit: int = KR_KOSDAQ_LIMIT,
 ) -> IngestResult:
     """한국 시세 수집 (KRX Open API, **인증키 필요**).
 
@@ -368,8 +456,9 @@ def ingest_kr_prices(
         refetch_recent_days: 최근 며칠은 이미 있어도 다시 받습니다. 장 마감
             직후 데이터가 나중에 정정되는 경우가 있어서입니다.
 
-    KRX 는 전 종목(2,700+)을 한 번에 주므로, 저장 **전에** 시총 상위 `limit`
-    종목으로 줄입니다. 저장 후 걸러내면 DB 가 이미 비대해진 뒤라 의미가 없습니다.
+    KRX 는 전 종목(2,700+)을 한 번에 주므로, 저장 **전에** 보드별 시총 상위
+    (KOSPI `kospi_limit` / KOSDAQ `kosdaq_limit`)로 줄입니다. 저장 후 걸러내면
+    DB 가 이미 비대해진 뒤라 의미가 없습니다.
     """
     from concurrent.futures import ThreadPoolExecutor
 
@@ -444,16 +533,50 @@ def ingest_kr_prices(
     # 상위 N을 다시 뽑으면 실행마다 종목 집합이 달라집니다. 그러면 종목별
     # 시계열에 구멍이 생기고(어떤 구간에만 존재), 그 구멍은 지표를 조용히
     # 틀리게 만듭니다. 이미 저장된 종목이 있으면 그 목록을 따릅니다.
-    existing = set(store.universe("KR")["ticker"]) if not store.universe("KR").empty else set()
+    #
+    # **예외는 상한이 줄었을 때뿐입니다.** 그때는 유지 규칙이 오히려 문제가
+    # 됩니다 -- 저장된 목록을 계속 따르므로, 상한만 바꿔서는 이미 쌓인 DB(CI
+    # 캐시)가 영원히 예전 크기로 남습니다. 그래서 위반이 감지되면 한 번
+    # 다시 뽑고, 빠진 종목은 저장소에서도 지웁니다.
     total_tickers = int(all_df["ticker"].nunique())
-    if existing:
-        all_df = all_df[all_df["ticker"].isin(existing)]
-        kept = int(all_df["ticker"].nunique())
+    target_set, target = select_kr_universe(
+        all_df, kospi_limit=kospi_limit, kosdaq_limit=kosdaq_limit
+    )
+    boards = _board_of(all_df)
+
+    stored = store.universe("KR")
+    existing = set(stored["ticker"].astype(str)) if not stored.empty else set()
+
+    over: list[str] = []
+    if boards:
+        for board, cap in (("KOSPI", kospi_limit), ("KOSDAQ", kosdaq_limit)):
+            held = sum(1 for t in existing if boards.get(t) == board)
+            if held > cap:
+                over.append(f"{board} {held}종목 > 상한 {cap}")
+    elif len(existing) > kospi_limit + kosdaq_limit:
+        over.append(f"{len(existing)}종목 > 상한 {kospi_limit + kosdaq_limit}")
+
+    if not existing:
+        keep = target_set
+    elif over:
+        keep = target_set
+        dropped = sorted(existing - keep)
+        removed_rows = store.delete_tickers("KR", dropped)
+        warnings.append(
+            f"유니버스 상한이 줄어 {len(dropped)}종목을 저장소에서 제거했습니다 "
+            f"({'; '.join(over)}). 지운 행 {removed_rows:,}개. 남는 종목은 "
+            f"KOSPI {len(target.get('KOSPI', []))} / "
+            f"KOSDAQ {len(target.get('KOSDAQ', []))} 입니다."
+        )
     else:
-        all_df, kept = limit_to_top_market_cap(all_df, limit)
+        keep = existing
+
+    all_df = all_df[all_df["ticker"].isin(keep)]
+    kept = int(all_df["ticker"].nunique())
     if kept < total_tickers:
         warnings.append(
-            f"전체 {total_tickers:,}종목 중 시총 상위 {kept}종목만 유지했습니다. "
+            f"전체 {total_tickers:,}종목 중 보드별 시총 상위만 유지했습니다 "
+            f"(KOSPI {kospi_limit} / KOSDAQ {kosdaq_limit} -> 실제 {kept}종목). "
             + UNIVERSE_LIMIT_CAVEAT
         )
     if all_df.empty:
