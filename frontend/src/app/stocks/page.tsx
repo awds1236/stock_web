@@ -195,9 +195,19 @@ export default function StocksPage() {
             ) : null}
           </h3>
 
+          {/* 현재가는 **고른 종목 하나만** 조회합니다. 목록 전체를 조회하면
+              1분마다 종목 수만큼의 요청이 한 브라우저에서 나갑니다.
+
+              종목코드·보드·시장을 **전부 `detail` 에서** 꺼내는 것이 중요합니다.
+              선택 상태(`ticker`)와 섞으면 상세를 불러오는 동안 둘이 어긋나,
+              새 종목코드에 이전 종목의 보드가 붙습니다. 그러면 접미사를
+              잘못 골라(.KS/.KQ) 헛된 요청이 한 번 더 나가고, 코드가 두 보드에
+              모두 존재하면 아예 다른 종목의 가격을 가져옵니다.
+              (브라우저 검사에서 실제로 발견된 결함입니다.) */}
           <LiveQuote
-            market={market}
-            ticker={ticker}
+            market={detail.market}
+            ticker={detail.ticker}
+            board={detail.board ?? null}
             fallbackClose={detail.prices.at(-1)?.close ?? null}
           />
 

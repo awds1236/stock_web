@@ -459,6 +459,9 @@ def _attention_list(panel: pd.DataFrame, per_ticker: list[dict]) -> list[dict]:
                 "name": _first_valid(g, "name"),
                 "sector": _first_valid(g, "sector"),
                 "industry": _first_valid(g, "industry"),
+                # 화면이 이 종목의 현재가를 조회할 때 심볼 접미사를 고르는 데
+                # 씁니다 (한국: KOSPI -> .KS, KOSDAQ -> .KQ).
+                "board": _first_valid(g, "board"),
                 "close": _f(g["close"].iloc[-1]),
                 "ret_20d": ret20_by_ticker.get(t),
                 "pct_from_52w_high": _f(px.pct_from_52w_high(g["close"]).iloc[-1]),

@@ -52,17 +52,32 @@ export default function MarketPage() {
   // 읽는 도중에 내용이 날아갑니다.
   usePolling(() => load(false), REPORT_POLL_MS, [load]);
 
-  // 주목 종목의 **현재가**. 분석 숫자는 일별이지만 가격은 지금 값이어야
-  // 합니다 -- 이 표를 보는 이유가 "지금 어떤지"이기 때문입니다.
-  const attentionTickers = useMemo(
-    () => (report?.attention ?? []).map((a) => a.ticker),
-    [report],
+  // 현재가는 **고른 종목 하나만** 조회합니다.
+  //
+  // 예전에는 주목 종목 12개를 전부 조회했습니다. 그러면 이 화면을 열어두는
+  // 것만으로 1분마다 12번의 요청이 나가고, 무료 시세 소스는 그 빈도에
+  // 차단으로 응답합니다. 표의 나머지 수치는 기준일 값이라 이미 완결되어
+  // 있으므로, 지금 값이 필요한 종목만 사용자가 고르게 합니다.
+  const [selected, setSelected] = useState<string | null>(null);
+  const picked = useMemo(
+    () => (report?.attention ?? []).find((a) => a.ticker === selected) ?? null,
+    [report, selected],
+  );
+  const requests = useMemo(
+    () => (picked ? [{ ticker: picked.ticker, board: picked.board ?? null }] : []),
+    [picked],
   );
   const fallbackCloses = useMemo(
     () => new Map((report?.attention ?? []).map((a) => [a.ticker, a.close])),
     [report],
   );
-  const quotes = useQuotes(market, attentionTickers, { fallbackCloses });
+  const quotes = useQuotes(market, requests, { fallbackCloses });
+
+  // 시장을 바꾸면 선택도 버립니다 -- 코드가 우연히 겹치면 다른 종목의 가격을
+  // 그 종목의 것으로 표시하게 됩니다.
+  useEffect(() => {
+    setSelected(null);
+  }, [market]);
 
   return (
     <>
@@ -157,8 +172,14 @@ export default function MarketPage() {
             updatedAt={quotes.updatedAt}
             onRefresh={quotes.refresh}
             loading={quotes.loading}
-            intervalMs={60_000}
-            extra={<span>가격만 자동 갱신 · 나머지 수치는 기준일 값</span>}
+            intervalMs={selected ? 60_000 : undefined}
+            extra={
+              <span>
+                {selected
+                  ? `${selected} 의 현재가만 1분마다 갱신 · 나머지 수치는 기준일 값`
+                  : "현재가는 종목을 고르면 조회합니다 · 표의 수치는 기준일 값"}
+              </span>
+            }
           />
           <div className="card">
             {quotes.error && (
@@ -187,7 +208,28 @@ export default function MarketPage() {
                       <span className="muted"> · {a.ticker}</span>
                     </td>
                     <td className="num">
-                      <QuoteCell quote={quotes.quotes.get(a.ticker)} fallback={a.close} />
+                      <QuoteCell
+                        quote={
+                          selected === a.ticker
+                            ? quotes.quotes.get(a.ticker)
+                            : undefined
+                        }
+                        fallback={a.close}
+                      />
+                      {selected === a.ticker ? (
+                        <span className="muted" style={{ marginLeft: 6, fontSize: 11 }}>
+                          {quotes.loading ? "조회 중…" : "1분마다"}
+                        </span>
+                      ) : (
+                        <button
+                          className="ghost tiny"
+                          style={{ marginLeft: 6 }}
+                          onClick={() => setSelected(a.ticker)}
+                          title="이 종목만 현재가를 조회합니다 (1분마다 갱신)"
+                        >
+                          현재가
+                        </button>
+                      )}
                     </td>
                     <td className={`num ${cls(a.ret_20d)}`}>{pct(a.ret_20d)}</td>
                     <td className="num">{pct(a.pct_from_52w_high)}</td>

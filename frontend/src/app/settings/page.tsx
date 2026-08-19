@@ -148,48 +148,75 @@ function BackendConnection() {
  * 그래서 추측하게 두지 않고 **직접 눌러 확인**하게 합니다. 실패하면 무엇을
  * 하면 되는지(백엔드 연결)까지 같은 자리에서 알려줍니다.
  */
+type ProbeResult = { market: string; label: string; ok: boolean; text: string };
+
+/** 진단 대상. 시장마다 경로가 다르므로 **둘 다** 확인해야 의미가 있습니다. */
+const PROBES = [
+  { market: "US", ticker: "AAPL", board: null, label: "미국 (AAPL)" },
+  { market: "KR", ticker: "005930", board: "KOSPI", label: "한국 (005930 삼성전자)" },
+];
+
 function QuoteDiagnostic() {
   const backend = useBackend();
-  const [result, setResult] = useState<
-    | { ok: true; text: string }
-    | { ok: false; text: string }
-    | null
-  >(null);
+  const [results, setResults] = useState<ProbeResult[] | null>(null);
   const [busy, setBusy] = useState(false);
+
+  async function probe(p: (typeof PROBES)[number]): Promise<ProbeResult> {
+    try {
+      if (backend.mode === "live") {
+        const [q] = await api.quotes(p.market, [p.ticker]);
+        return q?.source === "live"
+          ? {
+              market: p.market,
+              label: p.label,
+              ok: true,
+              text: `백엔드가 현재가 ${q.price} 를 받아왔습니다.`,
+            }
+          : {
+              market: p.market,
+              label: p.label,
+              ok: false,
+              text:
+                "백엔드는 연결되었지만 시세 소스에서 값을 받지 못했습니다. " +
+                `${q?.note ?? ""} 저장된 종가로 표시됩니다.`,
+            };
+      }
+      const quotes = await fetchBrowserQuotes(p.market, [
+        { ticker: p.ticker, board: p.board },
+      ]);
+      const q = quotes.get(p.ticker);
+      return q
+        ? {
+            market: p.market,
+            label: p.label,
+            ok: true,
+            text: `브라우저가 직접 현재가 ${q.price} 를 받아왔습니다 (${q.source}). 1분마다 갱신됩니다.`,
+          }
+        : {
+            market: p.market,
+            label: p.label,
+            ok: false,
+            text: "응답은 왔지만 가격이 비어 있습니다.",
+          };
+    } catch (e) {
+      return {
+        market: p.market,
+        label: p.label,
+        ok: false,
+        text: e instanceof Error ? e.message : String(e),
+      };
+    }
+  }
 
   async function check() {
     setBusy(true);
-    setResult(null);
-    try {
-      if (backend.mode === "live") {
-        const [q] = await api.quotes("US", ["AAPL"]);
-        setResult(
-          q?.source === "live"
-            ? { ok: true, text: `백엔드가 AAPL 현재가 ${q.price} 를 받아왔습니다.` }
-            : {
-                ok: false,
-                text:
-                  `백엔드는 연결되었지만 시세 소스에서 값을 받지 못했습니다. ` +
-                  `${q?.note ?? ""} 저장된 종가로 표시됩니다.`,
-              },
-        );
-      } else {
-        const quotes = await fetchBrowserQuotes("US", ["AAPL"]);
-        const q = quotes.get("AAPL");
-        setResult(
-          q
-            ? {
-                ok: true,
-                text: `브라우저가 직접 AAPL 현재가 ${q.price} 를 받아왔습니다 (${q.source}). 1분마다 갱신됩니다.`,
-              }
-            : { ok: false, text: "응답은 왔지만 가격이 비어 있습니다." },
-        );
-      }
-    } catch (e) {
-      setResult({ ok: false, text: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(false);
-    }
+    setResults(null);
+    // 순차로 부릅니다. 한 번에 두 개를 던지면 소스가 같은 곳이라 한쪽 실패가
+    // 다른 쪽의 실패로 번질 수 있습니다.
+    const out: ProbeResult[] = [];
+    for (const p of PROBES) out.push(await probe(p));
+    setResults(out);
+    setBusy(false);
   }
 
   return (
@@ -201,25 +228,28 @@ function QuoteDiagnostic() {
             {busy ? "확인 중…" : "지금 확인"}
           </button>
           <span className="muted" style={{ fontSize: 12 }}>
-            AAPL 로 한 번 조회해 봅니다
+            미국·한국 대표 종목으로 한 번씩 조회해 봅니다
           </span>
         </div>
 
-        {result && (
+        {results?.map((r) => (
           <div
-            className={`banner ${result.ok ? "info" : "warn"}`}
+            key={r.market}
+            className={`banner ${r.ok ? "info" : "warn"}`}
             style={{ marginTop: 10 }}
           >
-            <strong>{result.ok ? "가격 갱신이 동작합니다" : "가격 갱신이 막혀 있습니다"}</strong>
-            {result.text}
-            {!result.ok && (
+            <strong>
+              {r.label} — {r.ok ? "가격 갱신이 동작합니다" : "가격 갱신이 막혀 있습니다"}
+            </strong>
+            {r.text}
+            {!r.ok && (
               <div style={{ marginTop: 6 }}>
                 위의 <strong>백엔드 연결</strong>에 주소를 넣으면 서버가 대신
                 조회하므로 이 제약을 받지 않습니다.
               </div>
             )}
           </div>
-        )}
+        ))}
 
         <div className="caveat" style={{ marginTop: 10 }}>
           백엔드 없이 쓰는 브라우저 직접 조회는 비공식 무료 엔드포인트에

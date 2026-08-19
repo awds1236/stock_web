@@ -19,6 +19,7 @@ on:
     branches:
       - main
       - claude/korean-stock-analysis-app-1nzt2k
+      - claude/stock-api-optimization-0mbanz
   schedule:
     # 스냅샷 신선도는 이 스케줄이 정합니다.
     #

@@ -47,6 +47,7 @@ class FakeProvider:
                 "date": [trade_date, trade_date],
                 "ticker": ["005930", "000660"],
                 "name": ["삼성전자", "SK하이닉스"],
+                "board": ["KOSPI", "KOSDAQ"],
                 "open": [100.0, 200.0],
                 "high": [101.0, 202.0],
                 "low": [99.0, 198.0],
@@ -152,11 +153,11 @@ class TestIncremental:
 class TestUniverseStability:
     def test_universe_is_fixed_after_the_first_run(self, store, provider, no_classification):
         """실행마다 상위 N을 다시 뽑으면 종목별 시계열에 구멍이 생깁니다."""
-        pipeline.ingest_kr_prices(days=20, store=store, limit=1)
+        pipeline.ingest_kr_prices(days=20, store=store, kospi_limit=1, kosdaq_limit=1)
         first = set(store.universe("KR")["ticker"])
-        assert len(first) == 1
+        assert len(first) == 2, "보드마다 1종목씩"
 
-        pipeline.ingest_kr_prices(days=60, store=store, limit=1)
+        pipeline.ingest_kr_prices(days=60, store=store, kospi_limit=1, kosdaq_limit=1)
         assert set(store.universe("KR")["ticker"]) == first
 
 

@@ -20,6 +20,7 @@ from pydantic import BaseModel
 from app import reports
 from app.indicators import levels as lv
 from app.indicators import price as px
+from app.ingest.pipeline import KR_KOSDAQ_LIMIT, KR_KOSPI_LIMIT
 from app.markets import MARKETS, get_market
 from app.predict import calibration as cal
 from app.predict import features as feat
@@ -59,6 +60,9 @@ class UniverseItem(BaseModel):
     name: str | None
     sector: str | None
     industry: str | None
+    # 상장 시장 (KOSPI / KOSDAQ). 한국만 채워지며, 화면이 현재가 심볼을
+    # 만들 때 씁니다 -- 접미사가 보드마다 다릅니다(.KS / .KQ).
+    board: str | None = None
     first_date: str
     last_date: str
     n_days: int
@@ -91,6 +95,7 @@ class StockDetailOut(BaseModel):
     name: str | None
     sector: str | None
     industry: str | None
+    board: str | None = None
     prices: list[SeriesPoint]
     indicators: IndicatorSeries
     interpretation: list[dict]
@@ -225,6 +230,7 @@ def universe(market: str) -> list[UniverseItem]:
             name=r["name"],
             sector=r["sector"],
             industry=r.get("industry"),
+            board=r.get("board") if isinstance(r.get("board"), str) else None,
             first_date=str(r["first_date"]),
             last_date=str(r["last_date"]),
             n_days=int(r["n_days"]),
@@ -366,6 +372,11 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
         industry=(
             df["industry"].dropna().iloc[-1]
             if "industry" in df.columns and df["industry"].notna().any()
+            else None
+        ),
+        board=(
+            df["board"].dropna().iloc[-1]
+            if "board" in df.columns and df["board"].notna().any()
             else None
         ),
         prices=[
@@ -705,6 +716,9 @@ class WatchCandidate(BaseModel):
     name: str | None
     sector: str | None
     industry: str | None
+    # 현재가를 조회하려면 화면이 보드를 알아야 합니다(.KS / .KQ). 없으면
+    # 두 접미사를 모두 시도하게 되어 요청이 두 배가 됩니다.
+    board: str | None = None
     close: float | None
     ret_20d: float | None
     pct_from_52w_high: float | None
@@ -813,6 +827,8 @@ def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
                 if g["sector"].notna().any() else None,
                 industry=g["industry"].dropna().iloc[-1]
                 if "industry" in g.columns and g["industry"].notna().any() else None,
+                board=g["board"].dropna().iloc[-1]
+                if "board" in g.columns and g["board"].notna().any() else None,
                 close=_f(c.iloc[-1]),
                 ret_20d=_f(ret20),
                 pct_from_52w_high=_f(hi52),
@@ -934,7 +950,12 @@ class QuoteOut(BaseModel):
     note: str
 
 
-MAX_BATCH_QUOTES = 30
+# 한 번의 요청이 만들 수 있는 외부 호출 수의 상한.
+#
+# 화면은 **선택한 한 종목만** 조회하므로 평소에는 1입니다. 상한을 낮게 두는
+# 이유는 실수나 남용으로 한 번에 수십 번의 외부 호출이 나가는 것을 막기
+# 위해서입니다. provider 쪽에는 종목별 60초 캐시가 따로 있습니다.
+MAX_BATCH_QUOTES = 10
 
 
 @router.get("/quote/{market}/{ticker}", response_model=QuoteOut)
@@ -985,14 +1006,23 @@ def _quotes(market: str, tickers: list[str]) -> list[QuoteOut]:
     live_by_ticker = {}
     fallback_note = ""
     present = [t for t in tickers if (stored["ticker"] == t).any()]
-    if market == "US" and present:
-        from app.providers.quote import fetch_us_quotes
+    if present:
+        from app.providers.quote import KR_NOTE, fetch_quotes
 
-        live_by_ticker = fetch_us_quotes(present)
-    elif market == "KR":
-        from app.providers.quote import KR_NOTE
-
-        fallback_note = KR_NOTE
+        # 보드(KOSPI/KOSDAQ)를 넘겨야 한국 종목의 심볼 접미사를 고를 수
+        # 있습니다. 저장된 값이 없으면 provider 가 두 접미사를 모두 시도합니다.
+        boards = (
+            {
+                str(t): str(b)
+                for t, b in zip(stored["ticker"], stored.get("board", []), strict=False)
+                if isinstance(b, str) and b
+            }
+            if "board" in stored.columns
+            else {}
+        )
+        live_by_ticker = fetch_quotes(market, present, boards)
+        if market == "KR":
+            fallback_note = KR_NOTE
 
     out: list[QuoteOut] = []
     for ticker in present:
@@ -1016,10 +1046,12 @@ def _quotes(market: str, tickers: list[str]) -> list[QuoteOut]:
             )
             continue
 
-        note = fallback_note or (
+        # 실패 원인이 있으면 그것을 먼저 씁니다. 시장 단위 안내문
+        # (fallback_note)으로 덮으면 "왜 저장값인가"가 사라집니다.
+        note = (
             f"{live.note} 저장된 마지막 종가({as_of})를 표시합니다."
             if live is not None
-            else f"저장된 마지막 종가({as_of})입니다."
+            else (fallback_note or f"저장된 마지막 종가({as_of})입니다.")
         )
         out.append(
             QuoteOut(
@@ -1049,7 +1081,12 @@ class IngestOut(BaseModel):
 def ingest(
     market: str,
     years: int = Query(10, ge=1, le=25),
-    limit: int = Query(300, ge=20, le=2000, description="시총 상위 N종목만 저장"),
+    kospi_limit: int = Query(
+        KR_KOSPI_LIMIT, ge=10, le=1000, description="KOSPI 시총 상위 N종목"
+    ),
+    kosdaq_limit: int = Query(
+        KR_KOSDAQ_LIMIT, ge=10, le=1000, description="KOSDAQ 시총 상위 N종목"
+    ),
 ):
     """데이터 수집 실행.
 
@@ -1066,7 +1103,9 @@ def ingest(
         res = (
             ingest_us_prices(years=years)
             if market == "US"
-            else ingest_kr_prices(years=years, limit=limit)
+            else ingest_kr_prices(
+                years=years, kospi_limit=kospi_limit, kosdaq_limit=kosdaq_limit
+            )
         )
     except ProviderError as exc:
         raise HTTPException(409, str(exc)) from exc
