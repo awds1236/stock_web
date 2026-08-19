@@ -166,6 +166,27 @@ class TestUniverseShrinkMigration:
         assert (uni["board"] == "KOSDAQ").sum() == 1
         assert any("제거" in w for w in res.warnings), "무엇이 지워졌는지 알려야 합니다"
 
+    def test_a_board_that_answered_nothing_is_not_wiped_out(
+        self, tmp_path, monkeypatch, no_classification
+    ):
+        """한쪽 엔드포인트만 실패한 날에 그 보드를 통째로 지우면 안 됩니다.
+
+        KRX 는 보드별로 다른 엔드포인트입니다. 응답이 없었을 뿐인데 새
+        유니버스에서 빠졌다고 삭제하면, 되돌리려면 그 히스토리를 처음부터
+        다시 받아야 합니다.
+        """
+        store = Store(path=tmp_path / "p.duckdb")
+        both = _mixed(5, 5, date.today() - timedelta(days=1))
+        self._run(store, both, monkeypatch, kospi_limit=10, kosdaq_limit=10)
+        assert store.universe("KR")["ticker"].nunique() == 10
+
+        # 이번 배치에는 코스피만 들어왔고, 상한도 줄었습니다.
+        kospi_only = both[both["board"] == "KOSPI"]
+        self._run(store, kospi_only, monkeypatch, kospi_limit=2, kosdaq_limit=1)
+        uni = store.universe("KR")
+        assert (uni["board"] == "KOSPI").sum() == 2, "코스피는 상한대로 줄어야 합니다"
+        assert (uni["board"] == "KOSDAQ").sum() == 5, "응답이 없던 보드는 보존"
+
     def test_universe_is_left_alone_when_it_already_fits(
         self, tmp_path, monkeypatch, no_classification
     ):

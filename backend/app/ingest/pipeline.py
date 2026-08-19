@@ -559,9 +559,21 @@ def ingest_kr_prices(
     if not existing:
         keep = target_set
     elif over:
-        keep = target_set
-        dropped = sorted(existing - keep)
+        # **이번 배치가 실제로 값을 준 보드만 정리합니다.**
+        #
+        # 한쪽 엔드포인트만 실패하는 날이 있습니다(KRX 는 보드별로 다른
+        # 엔드포인트입니다). 그때 target 을 그대로 새 유니버스로 삼으면,
+        # 응답이 없었을 뿐인 보드의 종목이 통째로 삭제됩니다 -- 되돌리려면
+        # 그 히스토리를 처음부터 다시 받아야 합니다. 보드를 모르는 종목
+        # (상장폐지 등 이번 배치에 없는 종목)도 같은 이유로 남깁니다.
+        prunable = {b for b, codes in target.items() if codes}
+        dropped = sorted(
+            t
+            for t in existing
+            if t not in target_set and (not boards or boards.get(t) in prunable)
+        )
         removed_rows = store.delete_tickers("KR", dropped)
+        keep = (existing - set(dropped)) | target_set
         warnings.append(
             f"유니버스 상한이 줄어 {len(dropped)}종목을 저장소에서 제거했습니다 "
             f"({'; '.join(over)}). 지운 행 {removed_rows:,}개. 남는 종목은 "
