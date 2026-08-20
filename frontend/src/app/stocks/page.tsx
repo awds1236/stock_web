@@ -2,6 +2,7 @@
 
 import { AIAnalysisCard } from "@/components/AIAnalysisCard";
 import { Freshness } from "@/components/Freshness";
+import { LadderCard } from "@/components/LadderCard";
 import { LiveQuote } from "@/components/LiveQuote";
 import { StockSearch } from "@/components/StockSearch";
 import {
@@ -280,6 +281,13 @@ export default function StocksPage() {
               </LineChart>
             </ResponsiveContainer>
           </div>
+
+          {detail.ladder && (
+            <LadderCard
+              ladder={detail.ladder}
+              currency={market === "KR" ? "KRW" : "USD"}
+            />
+          )}
 
           <h3>이 종목 분석하기</h3>
           <div className="card">

@@ -20,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from app.indicators import ladder as ld
 from app.indicators import levels as lv
 from app.indicators import price as px
 from app.predict import sectors as sec
@@ -176,6 +177,9 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
             }
             for x in swing
         ],
+        # 지지/저항을 분할 매수·매도 구간으로 환산한 것. 신호가 아니라 산술이며,
+        # AI 서술도 이 숫자만 보고 구간을 이야기합니다(지어내지 못하게).
+        "ladder": ld.build_ladders(close, g["high"], g["low"], swing),
         "interpretation": interpret_indicators(g)
         + interpret_levels(swing, cross_20_60, cross_50_200),
         "rules": {

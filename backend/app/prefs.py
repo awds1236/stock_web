@@ -40,7 +40,10 @@ class Preferences(BaseModel):
         default=DEFAULT_AI_BASE_URL,
         description="OpenAI 호환 엔드포인트. 사설 게이트웨이나 프록시로 바꿀 수 있습니다.",
     )
-    ai_max_output_tokens: int = Field(default=2000, ge=256, le=16000)
+    # 3,000 인 이유: 종목 분석이 회차별 분할 구간(매수 3 + 매도 3)을 포함하면서
+    # 1,400자 안팎이 됩니다. 한국어는 토큰당 글자 수가 적어 2,000 토큰에서는
+    # 마지막 절('이 분석의 한계')이 잘려나갔습니다 -- 하필 잘리면 안 되는 절입니다.
+    ai_max_output_tokens: int = Field(default=3000, ge=256, le=16000)
     ai_timeout_seconds: float = Field(default=120.0, ge=10.0, le=600.0)
 
     auto_refresh_enabled: bool = Field(
