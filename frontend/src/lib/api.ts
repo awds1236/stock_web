@@ -57,6 +57,41 @@ export type Level = {
   distance_pct: number;
 };
 
+/** 분할 매수·매도의 한 회차. 신호가 아니라 산술입니다 (backend indicators/ladder.py). */
+export type Tranche = {
+  step: number;
+  price: number;
+  distance_pct: number;
+  weight: number;
+  cum_weight: number;
+  avg_price: number;
+  avg_vs_close_pct: number;
+  /** level = 지지/저항 클러스터, volatility = 수준이 모자라 ATR 등간격으로 채운 구간 */
+  basis: "level" | "volatility";
+  touches: number | null;
+};
+
+export type LadderPlan = {
+  side: "buy" | "sell";
+  weighting: string;
+  last_close: number;
+  invalidation: number | null;
+  invalidation_pct: number | null;
+  full_fill_avg_price: number | null;
+  full_fill_avg_vs_close_pct: number | null;
+  n_level_based: number;
+  n_volatility_based: number;
+  tranches: Tranche[];
+};
+
+export type Ladder = {
+  steps: number;
+  atr_14: number | null;
+  caveat: string;
+  buy: Record<string, LadderPlan>;
+  sell: Record<string, LadderPlan>;
+};
+
 export type StockDetail = {
   market: string;
   ticker: string;
@@ -68,6 +103,7 @@ export type StockDetail = {
   indicators: { date: string[]; values: Record<string, (number | null)[]> };
   interpretation: Interpretation[];
   levels: Level[];
+  ladder?: Ladder | null;
 };
 
 export type WatchSector = {

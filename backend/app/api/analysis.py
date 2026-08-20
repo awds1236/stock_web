@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 from app import reports
+from app.indicators import ladder as ld
 from app.indicators import levels as lv
 from app.indicators import price as px
 from app.ingest.pipeline import KR_KOSDAQ_LIMIT, KR_KOSPI_LIMIT
@@ -89,6 +90,45 @@ class LevelOut(BaseModel):
     distance_pct: float
 
 
+class TrancheOut(BaseModel):
+    step: int
+    price: float
+    distance_pct: float
+    weight: float
+    cum_weight: float
+    avg_price: float
+    avg_vs_close_pct: float
+    basis: str  # level | volatility -- 근거의 종류가 다르면 화면에서도 달라야 합니다
+    touches: int | None = None
+
+
+class LadderPlanOut(BaseModel):
+    side: str
+    weighting: str
+    last_close: float
+    invalidation: float | None = None
+    invalidation_pct: float | None = None
+    full_fill_avg_price: float | None = None
+    full_fill_avg_vs_close_pct: float | None = None
+    n_level_based: int = 0
+    n_volatility_based: int = 0
+    tranches: list[TrancheOut] = []
+
+
+class LadderOut(BaseModel):
+    """분할 매수·매도 구간.
+
+    비중 방식(균등/하단가중)을 **둘 다** 실어 보냅니다. 정적 배포에는 다시
+    부를 서버가 없으므로, 화면에서 전환하려면 미리 와 있어야 합니다.
+    """
+
+    steps: int
+    atr_14: float | None = None
+    caveat: str
+    buy: dict[str, LadderPlanOut] = {}
+    sell: dict[str, LadderPlanOut] = {}
+
+
 class StockDetailOut(BaseModel):
     market: str
     ticker: str
@@ -100,6 +140,7 @@ class StockDetailOut(BaseModel):
     indicators: IndicatorSeries
     interpretation: list[dict]
     levels: list[LevelOut]  # 지지/저항 참고선 (신호 아님 -- caveat 는 해석 카드에)
+    ladder: LadderOut | None = None  # 위 levels 를 분할 구간으로 환산한 것
 
 
 class ForecastQuality(BaseModel):
@@ -338,7 +379,17 @@ def _latest_market_caps(market: str) -> dict[str, float]:
 
 # ── 종목 상세 ─────────────────────────────────────────────────────────────
 @router.get("/stocks/{market}/{ticker}", response_model=StockDetailOut)
-def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000)):
+def stock_detail(
+    market: str,
+    ticker: str,
+    days: int = Query(500, ge=60, le=5000),
+    ladder_steps: int = Query(
+        ld.DEFAULT_STEPS,
+        ge=ld.MIN_STEPS,
+        le=ld.MAX_STEPS,
+        description="분할 매수·매도 회차 수 (최소 3)",
+    ),
+):
     _require_market(market)
     market = market.upper()
     store = get_store()
@@ -363,6 +414,7 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
     swing = lv.swing_levels(df["high"], df["low"], close)
     cross_20_60 = lv.ma_cross(close, fast=20, slow=60)
     cross_50_200 = lv.ma_cross(close, fast=50, slow=200)
+    ladder = ld.build_ladders(close, df["high"], df["low"], swing, steps=ladder_steps)
 
     return StockDetailOut(
         market=market,
@@ -403,6 +455,7 @@ def stock_detail(market: str, ticker: str, days: int = Query(500, ge=60, le=5000
             )
             for x in swing
         ],
+        ladder=LadderOut(**ladder),
     )
 
 
