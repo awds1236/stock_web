@@ -211,14 +211,49 @@ def build_plan(
 # (마크다운 렌더러를 타지 않습니다), 실제 배포 화면에 "**매매 신호가 아니라
 # 산술**" 이 별표째 노출됐습니다.
 LADDER_CAVEAT = (
-    "분할 구간은 매매 신호가 아니라 산술입니다. 근거가 되는 지지/저항은 이 "
-    "앱에서 학술적 근거가 가장 약한 지표이며(뚫리면 의미가 반전됩니다), 분할로 "
-    "나눈다고 그 약함이 사라지지 않습니다. 분할이 실제로 바꾸는 것은 진입가의 "
-    "분산이 줄어든다는 점 하나이며, 기대수익을 높이지 않습니다 -- 하락이 이어지면 "
-    "더 많은 금액이 물립니다. 비중 배분 방식(균등 / 뒤가중 -- 매수는 더 싼 회차, "
-    "매도는 더 비싼 회차에 더 싣는 방식) 중 어느 쪽이 낫다는 근거도 이 앱에는 "
-    "없습니다."
+    "구간은 지지/저항에서 나온 계산입니다. 지지/저항은 뚫리면 의미가 반전되므로 "
+    "무효화 가격을 반드시 함께 보십시오. 분할은 진입가의 분산을 줄일 뿐 "
+    "기대수익을 높이지 않습니다 -- 하락이 이어지면 더 많은 금액이 들어갑니다."
 )
+
+
+def risk_reward(buy: LadderPlan, sell: LadderPlan) -> dict:
+    """손익비 -- 이 계획을 실행할지 판단하는 **단일 숫자**.
+
+    매매에서 "어디서 사느냐"보다 먼저 정해지는 것은 "틀렸을 때 얼마를 잃느냐"
+    입니다. 이 앱은 그 숫자를 오래 화면에 두지 않았습니다 -- 지지/저항과 분할
+    구간까지 계산해 놓고 R(리스크 1단위)을 안 보여주면, 사용자는 구간만 보고
+    포지션 크기를 감으로 정하게 됩니다.
+
+        risk   = 평균 매수단가 - 무효화 가격   (계획이 틀렸을 때 1주당 손실)
+        reward = 평균 매도단가 - 평균 매수단가 (계획대로 갔을 때 1주당 이익)
+        R:R    = reward / risk
+
+    거래비용은 여기 넣지 않습니다 -- 비용은 수량이 정해져야 계산되므로 주문
+    계획(프론트엔드 lib/orderPlan.ts)에서 반영합니다.
+    """
+    if not buy.tranches or buy.invalidation is None:
+        return {}
+    avg_buy = buy.full_fill_avg_price
+    stop = buy.invalidation
+    if avg_buy is None:
+        return {}
+    risk = avg_buy - stop
+    if not (risk > 0):
+        return {}
+
+    avg_sell = sell.full_fill_avg_price if sell.tranches else None
+    reward = (avg_sell - avg_buy) if avg_sell is not None else None
+    return {
+        "avg_buy": round(avg_buy, 4),
+        "avg_sell": round(avg_sell, 4) if avg_sell is not None else None,
+        "stop": round(stop, 4),
+        "risk_per_share": round(risk, 4),
+        "risk_pct": round(risk / avg_buy, 6),
+        "reward_per_share": round(reward, 4) if reward is not None else None,
+        "reward_pct": round(reward / avg_buy, 6) if reward is not None else None,
+        "rr": round(reward / risk, 4) if reward is not None and reward > 0 else None,
+    }
 
 
 def build_ladders(
@@ -228,12 +263,16 @@ def build_ladders(
     levels,
     *,
     steps: int = DEFAULT_STEPS,
+    costs=None,
+    avg_daily_value: float | None = None,
 ) -> dict:
     """매수·매도 × 비중방식 조합의 분할 계획 전부.
 
     두 비중 방식을 모두 계산해 돌려주는 이유는, 화면에서 전환할 때마다
     서버를 다시 부르지 않기 위해서입니다 -- 정적 배포에는 부를 서버가
-    아예 없습니다.
+    아예 없습니다. 같은 이유로 거래비용률과 평균 거래대금도 함께 실어
+    보냅니다: 주문 수량은 사용자가 넣는 투자금액에 달려 있어 브라우저에서
+    계산해야 하는데, 비용률이 없으면 계산이 반쪽이 됩니다.
     """
     from app.indicators import price as px
 
@@ -250,21 +289,31 @@ def build_ladders(
         "steps": max(MIN_STEPS, min(MAX_STEPS, int(steps))),
         "atr_14": round(atr_value, 4) if atr_value is not None else None,
         "caveat": LADDER_CAVEAT,
+        "avg_daily_value": (
+            round(float(avg_daily_value), 2) if avg_daily_value is not None else None
+        ),
     }
+    if costs is not None:
+        out["costs"] = {
+            "commission": costs.commission,
+            "slippage": costs.slippage,
+            "sell_tax": costs.sell_tax,
+            "max_participation": costs.max_participation,
+        }
+
+    plans: dict[str, dict[str, LadderPlan]] = {}
     for side in ("buy", "sell"):
-        out[side] = {
-            w: _plan_dict(
-                build_plan(
-                    side,
-                    last_close,
-                    levels,
-                    atr_value=atr_value,
-                    steps=steps,
-                    weighting=w,
-                )
+        plans[side] = {
+            w: build_plan(
+                side, last_close, levels, atr_value=atr_value, steps=steps, weighting=w
             )
             for w in WEIGHTINGS
         }
+        out[side] = {w: _plan_dict(plan) for w, plan in plans[side].items()}
+
+    out["risk"] = {
+        w: risk_reward(plans["buy"][w], plans["sell"][w]) for w in WEIGHTINGS
+    }
     return out
 
 

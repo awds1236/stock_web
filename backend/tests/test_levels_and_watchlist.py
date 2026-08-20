@@ -182,10 +182,12 @@ class TestSectorLevels:
 
 
 class TestWatchlist:
-    def test_watchlist_has_rules_and_caveat(self, client):
+    def test_watchlist_has_rules_and_says_what_score_is(self, client):
+        """score 를 기대수익으로 읽으면 규칙 5개짜리 종목에 5배를 겁니다."""
         body = client.get("/api/watchlist/US").json()
-        assert body["rules"], "규칙이 명시되지 않으면 근거 없는 추천이 됩니다"
-        assert "매수 추천이 아니라" in body["caveat"]
+        assert body["rules"], "규칙이 명시되지 않으면 근거 없는 목록이 됩니다"
+        assert "score" in body["caveat"]
+        assert "기대수익이 아니" in body["caveat"]
         assert body["as_of"]
 
     def test_candidates_carry_reasons(self, client):
