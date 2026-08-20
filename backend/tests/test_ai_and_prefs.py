@@ -159,10 +159,23 @@ class TestAIClient:
 
 # ── 프롬프트 ──────────────────────────────────────────────────────────────
 class TestPrompts:
-    def test_system_forbids_invention_and_point_forecasts(self):
+    def test_system_forbids_invention_but_not_judgement(self):
+        """지어내기 금지와 판단 금지는 다른 규칙입니다.
+
+        한때 여기에 "추천을 하지 마십시오"가 있었습니다. 그 규칙을 뺀 것은
+        느슨해진 것이 아니라 목적이 바뀐 것입니다 -- 이 앱은 사용자가 자기
+        계좌로 주문을 넣는 데 씁니다. 대신 **숫자를 지어내지 못하게** 하는
+        규칙은 그대로 둡니다. 지어낸 숫자로 넣은 주문의 손실은 진짜입니다.
+        """
         assert "지어내지" in prompts.SYSTEM
-        assert "점 예측" in prompts.SYSTEM
-        assert "추천을 하지" in prompts.SYSTEM
+        assert "시점 예측" in prompts.SYSTEM, "'내일 X원'은 이 데이터로 계산되지 않습니다"
+        assert "판단을 내리십시오" in prompts.SYSTEM
+        assert "추천을 하지 마십시오" not in prompts.SYSTEM
+
+    def test_system_still_pins_the_invalidation_section(self):
+        """무효화 조건 없는 계획은 손절 없는 매매입니다."""
+        assert "## 이 판단이 틀리는 경우" in prompts.SYSTEM
+        assert "## 데이터 신뢰도" in prompts.SYSTEM
 
     def test_stock_prompt_embeds_the_computed_numbers(self):
         report = {"market": "US", "ticker": "AAA", "name": "A Corp",

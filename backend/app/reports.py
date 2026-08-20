@@ -23,6 +23,7 @@ import pandas as pd
 from app.indicators import ladder as ld
 from app.indicators import levels as lv
 from app.indicators import price as px
+from app.markets import cost_model_for
 from app.predict import sectors as sec
 from app.store import Store, get_store
 
@@ -37,9 +38,9 @@ WATCH_RULES = [
 ]
 
 RULE_CAVEAT = (
-    "이 규칙 조합의 예측력은 검증되지 않았습니다. 모멘텀 계열이라는 공통점만 "
-    "문헌 근거가 있으며, 걸린 규칙 수(score)는 신뢰도가 아니라 '몇 개에 "
-    "걸렸는가'일 뿐입니다."
+    "score 는 걸린 규칙 개수입니다 -- 신뢰도나 기대수익이 아닙니다. 이 조합의 "
+    "예측력은 백테스트로 검증되지 않았으므로, 후보를 좁히는 필터로 쓰고 "
+    "진입 여부는 종목 화면의 손익비로 판단하십시오."
 )
 
 
@@ -134,6 +135,7 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
         rank = {"rank": better + 1, "of": len(peers)}
 
     matched = matched_rules(g, universe_mean_ret60=_mean(peers))
+    liquidity = _liquidity(g)
 
     sector_name = _first_valid(g, "sector")
     industry_name = _first_valid(g, "industry")
@@ -167,7 +169,7 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
             "cross_20_60": _cross_dict(cross_20_60),
             "cross_50_200": _cross_dict(cross_50_200),
         },
-        "liquidity": _liquidity(g),
+        "liquidity": liquidity,
         "levels": [
             {
                 "price": round(x.price, 4),
@@ -179,7 +181,14 @@ def stock_report(market: str, ticker: str, *, store: Store | None = None) -> dic
         ],
         # 지지/저항을 분할 매수·매도 구간으로 환산한 것. 신호가 아니라 산술이며,
         # AI 서술도 이 숫자만 보고 구간을 이야기합니다(지어내지 못하게).
-        "ladder": ld.build_ladders(close, g["high"], g["low"], swing),
+        "ladder": ld.build_ladders(
+            close,
+            g["high"],
+            g["low"],
+            swing,
+            costs=cost_model_for(market),
+            avg_daily_value=liquidity.get("value_5d"),
+        ),
         "interpretation": interpret_indicators(g)
         + interpret_levels(swing, cross_20_60, cross_50_200),
         "rules": {
@@ -408,7 +417,8 @@ def market_report(market: str, *, store: Store | None = None) -> dict[str, Any]:
             "여기서 '시장'은 수집된 유니버스의 동일가중 평균이며 공식 지수가 "
             "아닙니다. 지수와 수치가 다른 것이 정상입니다.",
             RULE_CAVEAT,
-            "주목 종목은 매수 추천이 아니라 규칙에 걸린 관찰 후보입니다.",
+            "주목 종목은 규칙에 걸린 후보이며 score 는 걸린 규칙 개수입니다. "
+            "진입 판단은 종목 화면의 손익비에서 하십시오.",
         ],
     }
 

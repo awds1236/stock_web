@@ -84,12 +84,34 @@ export type LadderPlan = {
   tranches: Tranche[];
 };
 
+/** 계획이 틀렸을 때의 1주당 손실과 손익비. 비용 반영 전 값입니다. */
+export type LadderRisk = {
+  avg_buy?: number | null;
+  avg_sell?: number | null;
+  stop?: number | null;
+  risk_per_share?: number | null;
+  risk_pct?: number | null;
+  reward_per_share?: number | null;
+  reward_pct?: number | null;
+  rr?: number | null;
+};
+
 export type Ladder = {
   steps: number;
   atr_14: number | null;
   caveat: string;
   buy: Record<string, LadderPlan>;
   sell: Record<string, LadderPlan>;
+  risk?: Record<string, LadderRisk>;
+  /** 거래비용률 (소수 비율). 주문서의 실효 단가·손절 손실 계산에 씁니다. */
+  costs?: {
+    commission: number;
+    slippage: number;
+    sell_tax: number;
+    max_participation: number;
+  };
+  /** 5일 평균 거래대금. 주문이 체결 가능한 크기인지 보는 데 씁니다. */
+  avg_daily_value?: number | null;
 };
 
 export type StockDetail = {

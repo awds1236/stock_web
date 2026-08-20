@@ -81,8 +81,8 @@ export default function WatchlistPage() {
       <h2>관찰 목록</h2>
       <p className="sub">
         검색하지 않아도 규칙에 걸린 업종과 종목을 자동으로 모아 보여줍니다.
-        <strong> 매수 추천이 아닙니다</strong> — 어떤 규칙에 걸렸는지를 함께
-        표시하니 그 근거를 보고 판단하십시오.
+        여기서 후보를 좁힌 뒤 <strong>종목 화면의 분할 주문 계획</strong>에서
+        손익비를 보고 진입을 판단하십시오.
       </p>
 
       <div className="card">

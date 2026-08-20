@@ -22,7 +22,7 @@ from app.indicators import ladder as ld
 from app.indicators import levels as lv
 from app.indicators import price as px
 from app.ingest.pipeline import KR_KOSDAQ_LIMIT, KR_KOSPI_LIMIT
-from app.markets import MARKETS, get_market
+from app.markets import MARKETS, cost_model_for, get_market
 from app.predict import calibration as cal
 from app.predict import features as feat
 from app.predict import model as mdl
@@ -115,11 +115,39 @@ class LadderPlanOut(BaseModel):
     tranches: list[TrancheOut] = []
 
 
-class LadderOut(BaseModel):
-    """분할 매수·매도 구간.
+class LadderRiskOut(BaseModel):
+    """계획이 틀렸을 때의 1주당 손실과 손익비 (거래비용 반영 **전**)."""
 
-    비중 방식(균등/하단가중)을 **둘 다** 실어 보냅니다. 정적 배포에는 다시
+    avg_buy: float | None = None
+    avg_sell: float | None = None
+    stop: float | None = None
+    risk_per_share: float | None = None
+    risk_pct: float | None = None
+    reward_per_share: float | None = None
+    reward_pct: float | None = None
+    rr: float | None = None
+
+
+class CostsOut(BaseModel):
+    commission: float
+    slippage: float
+    sell_tax: float
+    max_participation: float
+
+
+class LadderOut(BaseModel):
+    """분할 매수·매도 구간과 그 실행에 필요한 값들.
+
+    비중 방식(균등/뒤가중)을 **둘 다** 실어 보냅니다. 정적 배포에는 다시
     부를 서버가 없으므로, 화면에서 전환하려면 미리 와 있어야 합니다.
+
+    같은 이유로 거래비용률(`costs`)과 평균 거래대금(`avg_daily_value`)도
+    함께 보냅니다. 주문 수량은 사용자가 넣는 투자금액에 달려 있어 브라우저가
+    계산하는데, 이 둘이 없으면 수수료·거래세 0 인 세계의 주문서가 나옵니다.
+
+    **필드를 여기 선언하지 않으면 pydantic 이 조용히 버립니다.** 실제로
+    costs/risk 를 계산해 놓고 이 모델에 적지 않아, 응답에서 통째로 사라진
+    적이 있습니다(브라우저 대조 검사에서 발견).
     """
 
     steps: int
@@ -127,6 +155,9 @@ class LadderOut(BaseModel):
     caveat: str
     buy: dict[str, LadderPlanOut] = {}
     sell: dict[str, LadderPlanOut] = {}
+    risk: dict[str, LadderRiskOut] = {}
+    costs: CostsOut | None = None
+    avg_daily_value: float | None = None
 
 
 class StockDetailOut(BaseModel):
@@ -414,7 +445,21 @@ def stock_detail(
     swing = lv.swing_levels(df["high"], df["low"], close)
     cross_20_60 = lv.ma_cross(close, fast=20, slow=60)
     cross_50_200 = lv.ma_cross(close, fast=50, slow=200)
-    ladder = ld.build_ladders(close, df["high"], df["low"], swing, steps=ladder_steps)
+    # 거래비용률과 평균 거래대금을 함께 실어 보냅니다. 주문 수량은 사용자가 넣는
+    # 투자금액에 달려 있어 브라우저에서 계산해야 하는데, 이 둘이 없으면 그 계산이
+    # 반쪽이 됩니다(비용 무시한 평균단가, 체결 가능성 미확인).
+    avg_value = None
+    if "value" in df.columns and df["value"].notna().any():
+        avg_value = _f(df["value"].tail(5).mean())
+    ladder = ld.build_ladders(
+        close,
+        df["high"],
+        df["low"],
+        swing,
+        steps=ladder_steps,
+        costs=cost_model_for(market),
+        avg_daily_value=avg_value,
+    )
 
     return StockDetailOut(
         market=market,
@@ -792,7 +837,7 @@ class WatchlistOut(BaseModel):
 def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
     """자동 관찰 목록: 상승 추세 업종 + 규칙 기반 종목 후보.
 
-    **매수 추천이 아닙니다.** 위 WATCH_RULES 에 걸린 종목을 점수순으로 보여줄
+    후보를 좁히는 스크리너입니다. 위 WATCH_RULES 에 걸린 종목을 점수순으로 보여줄
     뿐이며, 각 후보에 어떤 규칙이 걸렸는지(reasons)를 함께 반환합니다. 이
     규칙들의 예측력은 개별적으로 검증되지 않았고, 모멘텀 계열이라는 공통점만
     문헌 근거가 있습니다. 화면은 반드시 이 한계를 함께 표시해야 합니다.
@@ -898,11 +943,11 @@ def watchlist(market: str, top_stocks: int = Query(12, ge=3, le=30)):
         candidates=candidates[:top_stocks],
         rules=WATCH_RULES,
         caveat=(
-            "이 목록은 매수 추천이 아니라 규칙 기반 관찰 후보입니다. 규칙에 몇 개 "
-            "걸렸는지(score)를 점수로 쓸 뿐, 이 조합의 예측력은 검증되지 않았습니다. "
-            "모멘텀 계열 규칙이라는 공통점만 문헌 근거가 있으며, 예측 화면의 품질 "
-            "지표(skill score·IC)가 이 시장에서 낮다면 이 목록도 그만큼 회의적으로 "
-            "보아야 합니다."
+            "규칙에 걸린 순으로 정렬한 후보 목록입니다. score 는 걸린 규칙 "
+            "개수이지 기대수익이 아니므로, 여기서 후보를 좁힌 뒤 종목 화면의 "
+            "분할 주문 계획에서 손익비를 보고 진입을 판단하십시오. 예측 화면의 "
+            "skill score 가 이 시장에서 0 이하라면 모멘텀 계열 신호 전반을 그만큼 "
+            "낮게 보십시오."
         ),
     )
 

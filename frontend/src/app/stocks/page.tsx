@@ -156,9 +156,9 @@ export default function StocksPage() {
     <>
       <h2>종목 분석</h2>
       <p className="sub">
-        차트와 지표는 종목을 고르면 <strong>자동으로</strong> 불러옵니다. 유니버스
-        전체를 훑는 상대분석과 AI 서술은 <strong>버튼을 누른 종목에 대해서만</strong>{" "}
-        실행됩니다.
+        차트·지표·<strong>분할 주문 계획</strong>은 종목을 고르면 자동으로
+        계산됩니다. 유니버스 전체를 훑는 상대분석과 AI 서술은{" "}
+        <strong>버튼을 누른 종목에 대해서만</strong> 실행됩니다.
       </p>
 
       <div className="card">
@@ -285,7 +285,8 @@ export default function StocksPage() {
           {detail.ladder && (
             <LadderCard
               ladder={detail.ladder}
-              currency={market === "KR" ? "KRW" : "USD"}
+              market={detail.market}
+              currency={detail.market === "KR" ? "KRW" : "USD"}
             />
           )}
 
